@@ -24,7 +24,7 @@ Configuration.redis = {
   idle_mills = 10000
 }
 Configuration.api_access_expired_seconds = 600
-Configuration.device_id_header_name = 'x-device-id'
+Configuration.device_id_header_name = nil
 Configuration.device_id_check_uri = nil
 Configuration.device_id_check_async = true
 
@@ -35,9 +35,23 @@ local function string_isNullOrEmpty(str)
   return str == ""
 end
 
+local function string_indexOf(s, sub)
+  local index = string.find(s, sub, 1, true)
+  if index then
+    return index
+  else
+    return -1
+  end
+end
+
 local function string_trim(s)
   return (s:gsub("^%s*(.-)%s*$", "%1"))
 end
+
+function string_startsWith(s, sub)
+  return s:sub(1, #sub) == sub
+end
+
 
 local function boolean_value(obj)
   if obj == nil or obj == ngx.null then
@@ -53,7 +67,7 @@ local function boolean_value(obj)
   end
   
   if type(obj) == "string" then
-    local str = string_trim(obj)::lower()
+    local str = string_trim(obj):lower()
     if str == "true" or str == "ok" or str == "yes" or str == "y" or str == "1" then
       return true
     end
@@ -87,6 +101,14 @@ local function get_redis_client()
       return nil
     end
   end
+  
+  if Configuration.redis.database > 0 then
+    local res, err = red:select(Configuration.redis.database)
+    if not res then
+        ngx.log(ngx.ERR, "select database[" .. Configuration.redis.database .. "] failed", err)
+        return nil
+    end
+  end
 
   return red
 end
@@ -115,21 +137,69 @@ local function get_alphanumeric_underscore_key(str)
 end
 
 --redis :// [: password@] host [: port] [/ database][? [timeout=timeout[d|h|m|s|ms|us|ns]] [&database=database]]
---rediss :// [: password@] host [: port] [/ database][? [timeout=timeout[d|h|m|s|ms|us|ns]] [&database=database]]
 local function parse_redis_uri(uri)
   if string_isNullOrEmpty(uri) then
     return nil
   end
   
-  local pattern = "^rediss?://:?([^@]*)@?([^:/]*):?(%d*)/?(%d*)%??(.*)$"
-  local password, host, port, path_db, options_str = uri:match(pattern)
+  str = string_trim(uri)
   
-  if string_isNullOrEmpty(host) then
+  local idx = string_indexOf(str, "://")
+  if idx < 1 then
+    ngx.log(ngx.ERR, 'redis_uri[' .. uri .. '] is invlaid!'
     return nil
   end
+  
+  local scheme = str:sub(1, idx-1):lower()
+  if "redis" ~= scheme then
+    ngx.log(ngx.ERR, 'redis_uri[' .. uri .. '] is invlaid, only redis:// scheme is supported!'
+    return nil
+  end
+  
+  str = str:sub(idx+3)
+  if string_startsWith(str, ":") then
+    str = str:sub(2)
+  end
+  
+  local password = nil
+  idx = string_indexOf(str, "@")
+  if idx > 1 then
+    password = string_trim(str:sub(1, idx-1))
+    str = str:sub(idx+1)
+    if password == "" then
+      password = nil
+    end
+  end
+  
+  local host = nil
+  local port = 6379
+  idx = string_indexOf(str, ":")
+  if idx > 1 then
+    host = string_trim(str:sub(1, idx-1))
+    str = str:sub(idx+1)
+    idx = string_indexOf(str, "/")
+    if idx > 1 then
+      port = tonumber(string_trim(str:sub(1, idx-1))) or 6379
+      str = str:sub(idx+1)
+    else
+      port = tonumber(str) or 6379
+      str = ""
+    end
+  else
+    idx = string_indexOf(str, "/")
+    host = string_trim(str:sub(1, idx-1))
+    str = str:sub(idx+1)
+  end
+  
+  local database = 0
+  idx = string_indexOf("?")
+  if idx > 1 then
+    database = tonumber(string_trim(str:sub(1, idx-1))) or 0
+    str = string_trim(str:sub(idx+1))
+  end  
 
   local options = {}
-  for key, value in options_str:gmatch("([^&=]+)=([^&=]+)") do
+  for key, value in str:gmatch("([^&=]+)=([^&=]+)") do
       if key == "timeout" then
           local time, unit = value:match("(%d+)([dhmsu]?s?)")
           time = tonumber(time)
@@ -150,18 +220,16 @@ local function parse_redis_uri(uri)
               options.timeout = time
           end
       elseif key == "database" then
-          path_db = value
+          database = tonumber(key) or 0
       end
   end
 
-  local db = tonumber(path_db) or 0 
-
   return {
-      scheme = uri:sub(1, 5) == "rediss" and "rediss" or "redis",
+      scheme = scheme,
       host = host,
-      port = port ~= "" and tonumber(port) or 6379,
-      password = password ~= "" and password or nil,
-      db = db,
+      port = port,
+      password = password,
+      database = database,
       options = options
   }
 end
@@ -187,13 +255,11 @@ local function get_device_id()
     return ngx.ctx.device_ratelimit_device_id
   end
   
+  local device_id = nil
   if string_isNullOrEmpty(Configuration.device_id_header_name) then
-    return nil
-  end
-  
-  local device_id = ngx.req.get_headers()[Configuration.device_id_header_name]
-  if string_isNullOrEmpty(device_id) then
-    return nil
+    return ngx.var.remote_addr
+  else
+    device_id = ngx.req.get_headers()[Configuration.device_id_header_name]
   end
   
   ngx.ctx.device_ratelimit_device_id = device_id
@@ -444,6 +510,10 @@ local function is_device_id_valid(device_key)
   return ngx.ctx.device_ratelimit_device_id_valid
 end
 
+local function do_limit(aspect, metric, seconds, threshold)
+  
+end
+
 -- { redis_uri='', reids_conn_pool_size=50, redis_conn_idle_mills=10000, api_access_expired_seconds=600, device_id_header_name = 'x-device-id', device_id_check_uri = '', device_id_check_async = true} 
 function _M.config(config)
   if config ~= nil and next(config) ~= nil then
@@ -486,7 +556,33 @@ function _M.config(config)
   end
 end
 
-function _M.limit_current_api_recent(seconds, times)
+function _M.check_device_id(sync)
+  
+  sync = boolean_value(sync)
+  
+end
+
+function _M.set_device_id_valid(device_id, is_valid, expired_seconds)
+  if string_isNullOrEmpty(device_id) or is_valid == nil or expired_seconds == nil then
+    return
+  end
+  
+  is_valid = boolean_value(is_valid)
+  expired_seconds = tonumber(expired_seconds) or 0
+  
+  local device_key = get_alphanumeric_underscore_key(device_id)
+  set_device_key_valid(device_key, is_valid, expired_seconds)
+end
+
+function _M.check_remote_addr(sync)
+  
+end
+
+function _M.set_remote_addr_valid(remote_addr, is_valid, expired_seconds)
+  
+end
+
+function _M.limit_device_id_current_api(seconds, times)
   --If the deviceId is invalid, restrict access.
   if not is_device_id_valid(get_device_key()) then
     return true
@@ -508,7 +604,7 @@ function _M.limit_current_api_recent(seconds, times)
   return hits.current_api_access_count >= times
 end
 
-function _M.limit_total_apis_recent(seconds, times)
+function _M.limit_device_id_total_apis(seconds, times)
   --If the deviceId is invalid, restrict access.
   if not is_device_id_valid(get_device_key()) then
     return true
@@ -530,16 +626,17 @@ function _M.limit_total_apis_recent(seconds, times)
   return hits.total_apis_access_count >= times  
 end
 
-function _M.set_device_id_valid(device_id, is_valid, expired_seconds)
-  if string_isNullOrEmpty(device_id) or is_valid == nil or expired_seconds == nil then
-    return
-  end
+function _M.limit_global_current_api(seconds, times)
   
-  is_valid = boolean_value(is_valid)
-  expired_seconds = tonumber(expired_seconds) or 0
-  
-  local device_key = get_alphanumeric_underscore_key(device_id)
-  set_device_key_valid(device_key, is_valid, expired_seconds)
 end
+  
+function _M.limit_global_total_apis(seconds, times)
+  
+end
+
+function _M.record()
+  
+end
+
 
 return _M
