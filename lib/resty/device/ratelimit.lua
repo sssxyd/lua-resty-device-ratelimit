@@ -4,7 +4,9 @@ Date: 2023/10/23
 Initialization operations performed inside init_by_lua_block:
 
 ]]
-local _M = {}
+local _M = {
+  _VERSION = '0.33'
+}
 
 local redis = require("resty.redis")
 local http = require("resty.http")
