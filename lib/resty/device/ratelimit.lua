@@ -23,10 +23,9 @@ Configuration.redis = {
   pool_size = 100,
   idle_mills = 10000
 }
-Configuration.api_access_expired_seconds = 600
+Configuration.uri_hit_min_expired_seconds = 60
 Configuration.device_id_header_name = nil
 Configuration.device_id_check_uri = nil
-Configuration.device_id_check_async = true
 
 local function string_isNullOrEmpty(str)
   if str == nil or str == ngx.null or type(str) ~= "string" then
@@ -48,7 +47,7 @@ local function string_trim(s)
   return (s:gsub("^%s*(.-)%s*$", "%1"))
 end
 
-function string_startsWith(s, sub)
+local function string_startsWith(s, sub)
   return s:sub(1, #sub) == sub
 end
 
@@ -234,9 +233,9 @@ local function parse_redis_uri(uri)
   }
 end
 
-local function get_api_key()
-  if ngx.ctx.device_ratelimit_api_key ~= nil then
-    return ngx.ctx.device_ratelimit_api_key
+local function get_uri_key()
+  if ngx.ctx.device_ratelimit_uri_key ~= nil then
+    return ngx.ctx.device_ratelimit_uri_key
   end
   
   local uri = ngx.var.uri
@@ -245,9 +244,9 @@ local function get_api_key()
   if #uri == 0 then
     uri = "_"
   end
-  ngx.ctx.device_ratelimit_api_key = get_alphanumeric_underscore_key(uri)
+  ngx.ctx.device_ratelimit_uri_key = get_alphanumeric_underscore_key(uri)
   
-  return ngx.ctx.device_ratelimit_api_key
+  return ngx.ctx.device_ratelimit_uri_key
 end
 
 local function get_device_id()
@@ -283,17 +282,14 @@ local function get_device_key()
 end
 
 local function has_recorded()
-  if ngx.ctx.device_ratelimit_recorded and true or false then
-    return true
-  end
-  return false
+  return ngx.ctx.device_ratelimit_recorded and true or false
 end
 
 local function set_recorded()
   ngx.ctx.device_ratelimit_recorded = true
 end
 
-local function timer_incr_visit_hits(premature, time_slice, device_key, redis_key)
+local function timer_incr_visit_hits(premature, timestamp_second, device_key, uri_key)
   if premature then
     return
   end
@@ -303,18 +299,68 @@ local function timer_incr_visit_hits(premature, time_slice, device_key, redis_ke
     return
   end
   
-  local key1 = "resty_device_ratelimit_" .. device_key .. "_" .. time_slice
-  local key2 = "resty_device_ratelimit_" .. device_key .. "_" .. redis_key .. "_" .. time_slice
-  local expire_time = get_expired_seconds()
+  local ttl1 = get_key_preifx_expired_seconds("resty_device_ratelimit_global_")
+  local ttl2 = get_key_preifx_expired_seconds("resty_device_ratelimit_global_" .. uri_key .. "_")
+  local key1 = "resty_device_ratelimit_global_" .. timestamp_second
+  local key2 = "resty_device_ratelimit_global_" .. uri_key .. "_" .. timestamp_second
+  local count = 2
+  local ttl3 = 0
+  local ttl4 = 0
+  local key3 = nil
+  local key4 = nil
+  if device_key ~= nil then
+    ttl3 = get_key_preifx_expired_seconds("resty_device_ratelimit_" .. device_key .. "_")
+    ttl4 = get_key_preifx_expired_seconds("resty_device_ratelimit_" .. device_key .. "_" .. uri_key .. "_")
+    key3 = "resty_device_ratelimit_" .. device_key .. "_" .. timestamp_second
+    key4 = "resty_device_ratelimit_" .. device_key .. "_" .. uri_key .. "_" .. timestamp_second
+    count = 4
+  end
   
-  client:init_pipeline()
-  
-  client:incr(key1)
-  client:expire(key1, Configuration.api_access_expired_seconds)
-  client:incr(key2)
-  client:expire(key2, Configuration.api_access_expired_seconds)
+  client:init_pipeline(count)
+  client:ttl(key1)
+  client:ttl(key2)
+  if device_key ~= nil then
+    client:ttl(key3)
+    client:ttl(key4)
+  end
   
   local responses, errors = client:commit_pipeline()
+  if not responses then
+    close_redis_client(client)  
+    ngx.log(ngx.ERR, "Failed to commit Redis pipeline: ", errors)
+    return
+  end
+  
+  for i, res in ipairs(responses) do
+    local value = 0
+    if res ~= ngx.null then
+      value = (tonumber(res) or 0)
+    end
+    
+    if i == 1 then
+      ttl1 = (value == -1) and -1 or max(value, ttl1)
+    elseif i == 2 then
+      ttl2 = (value == -1) and -1 or max(value, ttl2)
+    elseif i == 3 then
+      ttl3 = (value == -1) and -1 or max(value, ttl3)
+    elseif i == 4 then
+      ttl4 = (value == -1) and -1 or max(value, ttl4)
+    end
+  end
+  
+  client:init_pipeline(count*2)
+  client:incr(key1)
+  client:expire(key1, ttl1)
+  client:incr(key2)
+  client:expire(key2, ttl2)
+  if device_key ~= nil then
+    client:incr(key3)
+    client:expire(key3, ttl3)
+    client:incr(key4)
+    client:expire(key4, ttl4)
+  end
+  
+  responses, errors = client:commit_pipeline()
   close_redis_client(client)
   
   if not responses then
@@ -329,36 +375,62 @@ local function timer_incr_visit_hits(premature, time_slice, device_key, redis_ke
   end
 end 
 
-local function do_record(time_slice)
+local function do_record(timestamp_second)
   if has_recorded() then
     return
   end
   
   set_recorded()
   
-  local ok, err = ngx.timer.at(0.1, timer_incr_visit_hits, time_slice, get_device_key(), get_api_key())
+  local ok, err = ngx.timer.at(0.1, timer_incr_visit_hits, timestamp_second, get_device_key(), get_uri_key())
   if not ok then
       ngx.log(ngx.ERR, "failed to create timer: ", err)
   end  
 end
 
-local function calc_device_visit_hits(device_key, redis_key, start_second, end_second)
+local function get_key_preifx_expired_seconds(redis_key_prefix)
+  if ngx.ctx.devie_ratelimit_cache_expires == nil then
+    ngx.ctx.devie_ratelimit_cache_expires = {}
+  end
+  
+  if ngx.ctx.devie_ratelimit_cache_expires[redis_key_prefix] == nil then
+    return Configuration.uri_hit_min_expired_seconds
+  end
+  
+  return ngx.ctx.devie_ratelimit_cache_expires[redis_key_prefix]
+end
+
+local function get_or_calc_hits(cache_key, redis_key_prefix, timestamp_second, seconds)
+  if ngx.ctx.devie_ratelimit_cache_hits == nil then
+    ngx.ctx.devie_ratelimit_cache_hits = {}
+  end
+  
+  if ngx.ctx.devie_ratelimit_cache_expires == nil then
+    ngx.ctx.devie_ratelimit_cache_expires = {}
+  end
+  
+  ngx.ctx.devie_ratelimit_cache_expires[cache_key] = seconds
+  
+  local hits = ngx.ctx.devie_ratelimit_cache_hits[cache_key]
+  if hits ~= nil then
+    return hits
+  end
+  
   local client = get_redis_client()
   if client == nil then
-    return {current_api_access_count = 0, total_apis_access_count = 0 }
+    return 0
   end
   
-  local second_count = end_second - start_second + 1
-  local prefix_scv = "resty_device_ratelimit_" .. device_key .. "_" .. redis_key .. "_"
-  local prefix_tcv = "resty_device_ratelimit_" .. device_key .. "_"
-  
-  client:init_pipeline(second_count*2)
-  for i = start_second, end_second do
-    client:get(prefix_scv .. i)
+  if seconds == 1 then
+    hits = client:get(redis_key_prefix .. timestamp_second)
+    close_redis_client(client)
+    ngx.ctx.devie_ratelimit_cache_hits[cache_key] = hits
+    return hits
   end
   
-  for i = start_second, end_second do
-    client:get(prefix_tcv .. i)
+  client:init_pipeline(seconds*2)
+  for i = timestamp_second - seconds + 1, timestamp_second do
+    client:get(redis_key_prefix .. i)
   end
   
   local responses, errors = client:commit_pipeline()
@@ -366,43 +438,44 @@ local function calc_device_visit_hits(device_key, redis_key, start_second, end_s
   
   if not responses then
     ngx.log(ngx.ERR, "Failed to commit Redis pipeline: ", errors)
-    return {current_api_access_count = 0, total_apis_access_count = 0 }
-  end
+    return 0
+  end  
   
-  local idx = 0
-  local scv_sum = 0
-  local tcv_sum = 0
+  hits = 0
   for i, res in ipairs(responses) do
     local value = 0
     if res ~= ngx.null then
       value = (tonumber(res) or 0)
     end
-    
-    if idx < second_count then
-      scv_sum = scv_sum + value
-    else
-      tcv_sum = tcv_sum + value
-    end
-    
-    idx = idx + 1
-  end  
-
-  return {current_api_access_count = scv_sum, total_apis_access_count = tcv_sum }
+    hits = hits + value
+  end   
+  
+  ngx.ctx.devie_ratelimit_cache_hits[cache_key] = hits
+  return hits
 end
 
-local function get_device_visit_hits(start_second, end_second)
-  local hit_key = "hit_" .. start_second .. "_" .. end_second
-  if ngx.ctx.devie_ratelimit_device_visit_hits == nil then
-    ngx.ctx.devie_ratelimit_device_visit_hits = {}
-  end
-  
-  --Cache the API access statistics for a specific time period
-  if ngx.ctx.devie_ratelimit_device_visit_hits[hit_key] == nil then
-    ngx.ctx.devie_ratelimit_device_visit_hits[hit_key] = calc_device_visit_hits(get_device_key(), get_api_key(), start_second, end_second)
-  end
-  
-  return ngx.ctx.devie_ratelimit_device_visit_hits[hit_key]
-  
+local function get_device_current_uri_hits(device_key, uri_key, timestamp_second, seconds)
+  local cache_key = "current_uri_" .. timestamp_second .. "_" .. seconds
+  local redis_key_prefix = "resty_device_ratelimit_" .. device_key .. "_" .. uri_key .. "_"
+  return get_or_calc_hits(cache_key, redis_key_prefix)
+end
+
+local function get_device_total_uris_hits(device_key, timestamp_second, seconds)
+  local cache_key = "total_uris_" .. timestamp_second .. "_" .. seconds
+  local redis_key_prefix = "resty_device_ratelimit_" .. device_key .. "_"
+  return get_or_calc_hits(cache_key, redis_key_prefix, timestamp_second, seconds)  
+end
+
+local function get_global_current_uri_hits(uri_key, timestamp_second, seconds)
+  local cache_key = "global_uri_" .. timestamp_second .. "_" .. seconds
+  local redis_key_prefix = "resty_device_ratelimit_global_" .. uri_key .. "_"
+  return get_or_calc_hits(cache_key, redis_key_prefix)  
+end
+
+local function get_global_total_uris_hits(timestamp_second, seconds)
+  local cache_key = "global_uris_" .. timestamp_second .. "_" .. seconds
+  local redis_key_prefix = "resty_device_ratelimit_global_"
+  return get_or_calc_hits(cache_key, redis_key_prefix)
 end
 
 local function set_device_key_valid(device_key, is_valid, expired_seconds) 
@@ -477,12 +550,12 @@ local function timer_check_device_id(premature, device_id, device_key, remote_ad
 end
 
 local function is_device_id_valid(device_key)
-  if Configuration.device_id_check_uri == nil then
-    return true
-  end
-  
   if string_isNullOrEmpty(device_key) then
     return false
+  end
+  
+  if Configuration.device_id_check_uri == nil then
+    return true
   end
   
   if ngx.ctx.device_ratelimit_device_id_valid == nil then
@@ -493,14 +566,10 @@ local function is_device_id_valid(device_key)
     
     if val == ngx.null then
       --Initiate verification when encountering an unverified deviceId
-      if Configuration.device_id_check_async then
-        ngx.ctx.device_ratelimit_device_id_valid = true
-        local ok, err = ngx.timer.at(0, timer_check_device_id, get_device_id(), device_key, ngx.var.remote_addr, ngx.time(), ngx.req.get_headers())
-        if not ok then
-            ngx.log(ngx.ERR, "failed to create timer: ", err)
-        end
-      else
-        ngx.ctx.device_ratelimit_device_id_valid = do_check_device_id(get_device_id(), get_device_key(), ngx.var.remote_addr, ngx.time(), ngx.req.get_headers())
+      ngx.ctx.device_ratelimit_device_id_valid = true
+      local ok, err = ngx.timer.at(0, timer_check_device_id, get_device_id(), device_key, ngx.var.remote_addr, ngx.time(), ngx.req.get_headers())
+      if not ok then
+          ngx.log(ngx.ERR, "failed to create timer: ", err)
       end
     else
       ngx.ctx.device_ratelimit_device_id_valid = boolean_value(val)
@@ -510,11 +579,7 @@ local function is_device_id_valid(device_key)
   return ngx.ctx.device_ratelimit_device_id_valid
 end
 
-local function do_limit(aspect, metric, seconds, threshold)
-  
-end
-
--- { redis_uri='', reids_conn_pool_size=50, redis_conn_idle_mills=10000, api_access_expired_seconds=600, device_id_header_name = 'x-device-id', device_id_check_uri = '', device_id_check_async = true} 
+-- { redis_uri='', reids_conn_pool_size=50, redis_conn_idle_mills=10000, device_id_header_name = 'x-device-id', device_id_check_uri = ''} 
 function _M.config(config)
   if config ~= nil and next(config) ~= nil then
     local redis = parse_redis_uri(tostring(config.redis_uri) or "")
@@ -537,10 +602,6 @@ function _M.config(config)
       Configuration.redis.idle_mills = tonumber(config.redis_conn_idle_mills) or Configuration.redis.idle_mills
     end
     
-    if config.api_access_expired_seconds ~= nil then
-      Configuration.api_access_expired_seconds = tonumber(config.api_access_expired_seconds) or Configuration.api_access_expired_seconds
-    end
-    
     if config.device_id_header_name ~= nil and not string_isNullOrEmpty(tostring(config.device_id_header_name)) then
       Configuration.device_id_header_name = tostring(config.device_id_header_name)
     end
@@ -549,94 +610,61 @@ function _M.config(config)
       Configuration.device_id_check_uri = config.device_id_check_uri
     end
     
-    if config.device_id_check_async ~= nil then
-      Configuration.device_id_check_async = boolean_value(config.device_id_check_async)
-    end
-
   end
 end
 
-function _M.check_device_id(sync)
+function _M.limit(metrics, seconds, times)
+  local timestamp_second = ngx.time()
+  seconds = tonumber(seconds) or 0
+  times = tonumber(times) or 0
+  if seconds <=0 or times <= 0 or string_isNullOrEmpty(metrics) then
+    return false
+  end
   
-  sync = boolean_value(sync)
+  local hits = -1
+  metrics = string_trim(metrics):lower()
+  if "global_current_uri" == metrics then
+    hits = get_global_current_uri_hits(get_uri_key(), timestamp_second, seconds)
+  elseif "global_total_uris" == metrics then
+    hits = get_global_total_uris_hits(timestamp_second, seconds)
+  elseif "device_current_uri" == metrics then
+    if get_device_key() == nil then
+      return true
+    end
+    hits = get_device_current_uri_hits(get_device_key(), get_uri_key(), timestamp_second, seconds)
+  elseif "device_total_uris" == metrics then
+    if get_device_key() == nil then
+      return true
+    end
+    hits = get_device_total_uris_hits(get_device_key(), timestamp_second, seconds)
+  end
+  
+  if hits < 0 then
+    return false
+  end
+  
+  return hits >= times
   
 end
 
-function _M.set_device_id_valid(device_id, is_valid, expired_seconds)
-  if string_isNullOrEmpty(device_id) or is_valid == nil or expired_seconds == nil then
+function _M.check()
+  return do_check_device_id(get_device_id(), get_device_key(), ngx.var.remote_addr, ngx.time(), ngx.req.get_headers())
+end
+
+function _M.record()
+  do_record(ngx.time())
+end
+
+function _M.setValid(device_id, is_valid, expired_seconds)
+  if string_isNullOrEmpty(device_id) then
     return
   end
   
   is_valid = boolean_value(is_valid)
   expired_seconds = tonumber(expired_seconds) or 0
   
-  local device_key = get_alphanumeric_underscore_key(device_id)
-  set_device_key_valid(device_key, is_valid, expired_seconds)
-end
-
-function _M.check_remote_addr(sync)
+  set_device_key_valid(get_alphanumeric_underscore_key(device_id), is_valid, expired_seconds)
   
 end
-
-function _M.set_remote_addr_valid(remote_addr, is_valid, expired_seconds)
-  
-end
-
-function _M.limit_device_id_current_api(seconds, times)
-  --If the deviceId is invalid, restrict access.
-  if not is_device_id_valid(get_device_key()) then
-    return true
-  end 
-  
-  local end_second = ngx.time()
-  seconds = tonumber(seconds) or 0
-  times = tonumber(times) or 0
-  --If the latest access seconds or number of accesses is not set, then do not restrict access
-  if seconds <=0 or times <= 0 then
-    do_record(end_second)
-    return false
-  end
-  
-  local hits = get_device_visit_hits(end_second - seconds, end_second)
-  
-  do_record(end_second)
-  
-  return hits.current_api_access_count >= times
-end
-
-function _M.limit_device_id_total_apis(seconds, times)
-  --If the deviceId is invalid, restrict access.
-  if not is_device_id_valid(get_device_key()) then
-    return true
-  end
-  
-  local end_second = ngx.time()
-  seconds = tonumber(seconds) or 0
-  times = tonumber(times) or 0
-  --If the latest access seconds or number of accesses is not set, then do not restrict access
-  if seconds <=0 or times <= 0 then
-    do_record(end_second)
-    return false
-  end
-  
-  local hits = get_device_visit_hits(end_second - seconds, end_second)
-  
-  do_record(end_second)
-  
-  return hits.total_apis_access_count >= times  
-end
-
-function _M.limit_global_current_api(seconds, times)
-  
-end
-  
-function _M.limit_global_total_apis(seconds, times)
-  
-end
-
-function _M.record()
-  
-end
-
 
 return _M
