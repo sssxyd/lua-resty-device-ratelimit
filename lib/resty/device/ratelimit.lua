@@ -628,12 +628,12 @@ function _M.limit(metrics, seconds, times)
   elseif "global_total_uris" == metrics then
     hits = get_global_total_uris_hits(timestamp_second, seconds)
   elseif "device_current_uri" == metrics then
-    if get_device_key() == nil then
+    if not is_device_id_valid(get_device_key()) then
       return true
     end
     hits = get_device_current_uri_hits(get_device_key(), get_uri_key(), timestamp_second, seconds)
   elseif "device_total_uris" == metrics then
-    if get_device_key() == nil then
+    if not is_device_id_valid(get_device_key()) then
       return true
     end
     hits = get_device_total_uris_hits(get_device_key(), timestamp_second, seconds)
