@@ -281,14 +281,6 @@ local function get_device_key()
   return ngx.ctx.device_ratelimit_device_key
 end
 
-local function has_recorded()
-  return ngx.ctx.device_ratelimit_recorded and true or false
-end
-
-local function set_recorded()
-  ngx.ctx.device_ratelimit_recorded = true
-end
-
 local function timer_incr_visit_hits(premature, timestamp_second, device_key, uri_key)
   if premature then
     return
@@ -299,8 +291,8 @@ local function timer_incr_visit_hits(premature, timestamp_second, device_key, ur
     return
   end
   
-  local ttl1 = get_key_preifx_expired_seconds("resty_device_ratelimit_global_")
-  local ttl2 = get_key_preifx_expired_seconds("resty_device_ratelimit_global_" .. uri_key .. "_")
+  local ttl1 = get_key_prefix_expired_seconds("resty_device_ratelimit_global_")
+  local ttl2 = get_key_prefix_expired_seconds("resty_device_ratelimit_global_" .. uri_key .. "_")
   local key1 = "resty_device_ratelimit_global_" .. timestamp_second
   local key2 = "resty_device_ratelimit_global_" .. uri_key .. "_" .. timestamp_second
   local count = 2
@@ -309,8 +301,8 @@ local function timer_incr_visit_hits(premature, timestamp_second, device_key, ur
   local key3 = nil
   local key4 = nil
   if device_key ~= nil then
-    ttl3 = get_key_preifx_expired_seconds("resty_device_ratelimit_" .. device_key .. "_")
-    ttl4 = get_key_preifx_expired_seconds("resty_device_ratelimit_" .. device_key .. "_" .. uri_key .. "_")
+    ttl3 = get_key_prefix_expired_seconds("resty_device_ratelimit_" .. device_key .. "_")
+    ttl4 = get_key_prefix_expired_seconds("resty_device_ratelimit_" .. device_key .. "_" .. uri_key .. "_")
     key3 = "resty_device_ratelimit_" .. device_key .. "_" .. timestamp_second
     key4 = "resty_device_ratelimit_" .. device_key .. "_" .. uri_key .. "_" .. timestamp_second
     count = 4
@@ -373,22 +365,9 @@ local function timer_incr_visit_hits(premature, timestamp_second, device_key, ur
       ngx.log(ngx.ERR, "Failed to execute command in pipeline at index ", i, ": ", errors[i])
     end
   end
-end 
-
-local function do_record(timestamp_second)
-  if has_recorded() then
-    return
-  end
-  
-  set_recorded()
-  
-  local ok, err = ngx.timer.at(0.1, timer_incr_visit_hits, timestamp_second, get_device_key(), get_uri_key())
-  if not ok then
-      ngx.log(ngx.ERR, "failed to create timer: ", err)
-  end  
 end
 
-local function get_key_preifx_expired_seconds(redis_key_prefix)
+local function get_key_prefix_expired_seconds(redis_key_prefix)
   if ngx.ctx.devie_ratelimit_cache_expires == nil then
     ngx.ctx.devie_ratelimit_cache_expires = {}
   end
@@ -648,23 +627,51 @@ function _M.limit(metrics, seconds, times)
 end
 
 function _M.check()
-  return do_check_device_id(get_device_id(), get_device_key(), ngx.var.remote_addr, ngx.time(), ngx.req.get_headers())
+  local device_id = get_device_id()
+  if device_id == nil then
+    return false
+  end
+  
+  if Configuration.device_id_check_uri == nil then
+    return true
+  end  
+  
+  local device_key = get_device_key()
+  local remote_addr = ngx.var.remote_addr or ""
+  local req_headers = ngx.req.get_headers() or {}
+  
+  if ngx.ctx.device_ratelimit_device_id_valid == nil then
+    --Attempt to retrieve the verification status of the deviceId from Redis
+    local client = get_redis_client()
+    local val = client:get("resty_device_ratelimit_" .. device_key .. "_valid")
+    close_redis_client(client)
+    
+    if val == ngx.null then
+      ngx.ctx.device_ratelimit_device_id_valid = do_check_device_id(device_id, device_key, remote_addr, ngx.time(), req_headers)
+    else
+      ngx.ctx.device_ratelimit_device_id_valid = boolean_value(val)
+    end
+  end  
+  return ngx.ctx.device_ratelimit_device_id_valid
 end
 
 function _M.record()
-  do_record(ngx.time())
-end
+  if ngx.ctx.device_ratelimit_recorded then
+    return
+  end
 
-function _M.setValid(device_id, is_valid, expired_seconds)
-  if string_isNullOrEmpty(device_id) then
+  local device_key = get_device_key()
+  local uri_key = get_uri_key()
+  if device_key == nil or uri_key == nil then
     return
   end
   
-  is_valid = boolean_value(is_valid)
-  expired_seconds = tonumber(expired_seconds) or 0
+  ngx.ctx.device_ratelimit_recorded = true
   
-  set_device_key_valid(get_alphanumeric_underscore_key(device_id), is_valid, expired_seconds)
-  
+  local ok, err = ngx.timer.at(0, timer_incr_visit_hits, ngx.time(), device_key, uri_key)
+  if not ok then
+      ngx.log(ngx.ERR, "failed to create timer: ", err)
+  end  
 end
 
 return _M
