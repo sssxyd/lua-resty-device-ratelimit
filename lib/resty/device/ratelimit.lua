@@ -1,8 +1,7 @@
 --[[
 Author: xuyd
 Date: 2023/10/23
-Initialization operations performed inside init_by_lua_block:
-
+controlling the rate of requests based on the deviceId in the heade
 ]]
 local _M = {
   _VERSION = '0.33'
@@ -280,6 +279,7 @@ local function get_device_id()
   end
   
   local device_id = nil
+  --If the device_id_header_name is not configured, the client's address is used as the deviceId
   if string_isNullOrEmpty(Configuration.device_id_header_name) then
     return ngx.var.remote_addr
   else
@@ -306,6 +306,7 @@ local function get_device_key()
   return ngx.ctx.device_ratelimit_device_key
 end
 
+--Obtain the interface address for the deviceId check configured for a specific server
 local function get_check_url(server_name, server_port)
   local url = Configuration.server_device_check_urls[server_name .. ':' .. server_port]
   if string_isNullOrEmpty(url) then
@@ -574,7 +575,15 @@ local function is_device_id_valid(device_id, device_key, remote_addr, req_uri, r
   return ngx.ctx.device_ratelimit_device_id_valid
 end
 
--- { redis_uri='', redis_conn_pool_size=50, redis_conn_idle_mills=10000, device_id_header_name = 'x-device-id', default_device_check_url = '', server_device_check_urls = {}} 
+
+-- {
+-- redis_uri(required): redis :// [: password@] host [: port] [/ database][? [timeout=timeout[d|h|m|s|ms|us|ns]] [&database=database]]
+-- redis_conn_pool_size(optional): default 50, The size of the Redis connection pool
+-- redis_conn_idle_mills(optional): default 10000 (ms), The number of milliseconds a connection is idle in the connection pool
+-- device_id_header_name(optional): The name of the HTTP Header in the Request that holds the deviceId， If not set, use the client's IP as the deviceId
+-- default_device_check_url(optional): The address for checking the legality of the deviceId, if a corresponding server configuration is not found in server_device_check_urls, then use this address
+-- server_device_check_urls(optional): Configure the address for checking the legality of the deviceId corresponding to different Server:Port
+-- }
 function _M.config(config)
   if config ~= nil and next(config) ~= nil then
     local redis = parse_redis_uri(tostring(config.redis_uri) or "")
@@ -616,6 +625,14 @@ function _M.config(config)
   end
 end
 
+--metrics(required): device_current_uri/device_total_uris/global_current_uri/global_total_uris
+--seconds: The number of seconds from the current time
+--times：max visit times
+--example
+-- limit("device_current_uri", 1, 1) means: Limit the same device to access the current interface no more than once per second
+-- limit("device_total_uris", 30, 100) means: Limit the same device to a total of 100 accesses to any interface of this service within any 30-second period
+-- limit("global_current_uri", 1, 10) means: Limit this service to only allow 10 accesses per second to the current interface
+-- limit("global_total_uris", 1, 1000) means: Limit the current service to support a maximum of 1000 accesses per second
 function _M.limit(metrics, seconds, times)
   local timestamp_second = ngx.time()
   seconds = tonumber(seconds) or 0
@@ -664,6 +681,10 @@ function _M.limit(metrics, seconds, times)
   
 end
 
+--Synchronously verify the legality of the deviceId; 
+--Please note that：
+--1. If no address for verifying the deviceId is found, or if the call to that address times out or fails, then return true
+--2. Even if this method is not called, the legality of the deviceId will still be verified asynchronously
 function _M.check()
   local device_id = get_device_id()
   if device_id == nil then
@@ -697,6 +718,7 @@ function _M.check()
   return ngx.ctx.device_ratelimit_device_id_valid
 end
 
+--Asynchronously log this access to Redis
 function _M.record()
   if ngx.ctx.device_ratelimit_recorded then
     return
