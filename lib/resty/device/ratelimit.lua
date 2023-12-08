@@ -25,7 +25,8 @@ Configuration.redis = {
 }
 Configuration.uri_hit_min_expired_seconds = 60
 Configuration.device_id_header_name = nil
-Configuration.device_id_check_uri = nil
+Configuration.default_device_check_url = nil
+Configuration.server_device_check_urls = {}
 
 local function string_isNullOrEmpty(str)
   if str == nil or str == ngx.null or type(str) ~= "string" then
@@ -305,6 +306,14 @@ local function get_device_key()
   return ngx.ctx.device_ratelimit_device_key
 end
 
+local function get_check_url(server_name, server_port)
+  local url = Configuration.server_device_check_urls[server_name .. ':' .. server_port]
+  if string_isNullOrEmpty(url) then
+    url = Configuration.default_device_check_url
+  end
+  return url
+end
+
 local function timer_incr_visit_hits(premature, timestamp_second, device_key, uri_key, metrics_expired_cache)
   if premature then
     return
@@ -476,17 +485,25 @@ local function set_device_key_valid(device_key, is_valid, expired_seconds)
   end
 end
 
-local function do_check_device_id(device_id, device_key, remote_addr, request_uri, request_time, request_headers)
+local function do_check_device_id(device_id, device_key, remote_addr, request_uri, request_time, request_headers, server_name, server_port)
+  local url = get_check_url(server_name, server_port)
+  if string_isNullOrEmpty(url) or not isValidHttpUrl(url) then
+    return true
+  end
+  
   local httpc = http.new()
   httpc:set_timeout(3000)
   local data = {
       device_id = device_id,
       remote_addr = remote_addr,
       request_uri = request_uri,
-      request_headers = request_headers
+      request_time = request_time,
+      request_headers = request_headers,
+      server_name = server_name,
+      server_port = server_port
   }
 
-  local res, err = httpc:request_uri(Configuration.device_id_check_uri, {
+  local res, err = httpc:request_uri(url, {
       method = "POST",
       body = cjson.encode(data),
       headers = {
@@ -495,6 +512,7 @@ local function do_check_device_id(device_id, device_key, remote_addr, request_ur
   })
 
   if not res then
+    ngx.log(ngx.ERR, err)
     set_device_key_valid(device_key, true, 60)
     return true
   end
@@ -510,28 +528,28 @@ local function do_check_device_id(device_id, device_key, remote_addr, request_ur
     return true
   end
   
-  local valid = (tonumber(result.valid) or 0) > 0
+  local valid = boolean_value(result.valid)
   local expired_seconds = tonumber(result.expired_seconds) or 60
   set_device_key_valid(device_key, valid, expired_seconds) 
   
   return valid
 end
 
-local function timer_check_device_id(premature, device_id, device_key, remote_addr, request_uri, request_time, request_headers)
+local function timer_check_device_id(premature, device_id, device_key, remote_addr, request_uri, request_time, request_headers, server_name, server_port)
   if premature then
     return
   end
   
-  do_check_device_id(device_id, device_key, remote_addr, request_uri, request_time, request_headers)
+  do_check_device_id(device_id, device_key, remote_addr, request_uri, request_time, request_headers, server_name, server_port)
     
 end
 
-local function is_device_id_valid(device_key)
+local function is_device_id_valid(device_id, device_key, remote_addr, req_uri, req_time, req_headers, server_name, server_port)
   if string_isNullOrEmpty(device_key) then
     return false
   end
   
-  if Configuration.device_id_check_uri == nil then
+  if get_check_url(server_name, server_port) == nil then
     return true
   end
   
@@ -544,7 +562,7 @@ local function is_device_id_valid(device_key)
     if val == ngx.null then
       --Initiate verification when encountering an unverified deviceId
       ngx.ctx.device_ratelimit_device_id_valid = true
-      local ok, err = ngx.timer.at(0, timer_check_device_id, get_device_id(), device_key, ngx.var.remote_addr, ngx.time(), ngx.req.get_headers())
+      local ok, err = ngx.timer.at(0, timer_check_device_id, device_id, device_key, remote_addr, req_uri, req_time, req_headers, server_name, server_port)
       if not ok then
           ngx.log(ngx.ERR, "failed to create timer: ", err)
       end
@@ -556,7 +574,7 @@ local function is_device_id_valid(device_key)
   return ngx.ctx.device_ratelimit_device_id_valid
 end
 
--- { redis_uri='', redis_conn_pool_size=50, redis_conn_idle_mills=10000, device_id_header_name = 'x-device-id', device_id_check_uri = ''} 
+-- { redis_uri='', redis_conn_pool_size=50, redis_conn_idle_mills=10000, device_id_header_name = 'x-device-id', default_device_check_url = '', server_device_check_urls = {}} 
 function _M.config(config)
   if config ~= nil and next(config) ~= nil then
     local redis = parse_redis_uri(tostring(config.redis_uri) or "")
@@ -583,8 +601,16 @@ function _M.config(config)
       Configuration.device_id_header_name = tostring(config.device_id_header_name)
     end
     
-    if config.device_id_check_uri ~= nil and isValidHttpUrl(tostring(config.device_id_check_uri)) then
-      Configuration.device_id_check_uri = config.device_id_check_uri
+    if config.default_device_check_url ~= nil and isValidHttpUrl(tostring(config.default_device_check_url)) then
+      Configuration.default_device_check_url = config.default_device_check_url
+    end
+    
+    if config.server_device_check_urls ~= nil and next(config.server_device_check_urls) ~= nil then
+      for key, value in pairs(config.server_device_check_urls) do
+        if not string_isNullOrEmpty(value) and isValidHttpUrl(value) then
+          Configuration.server_device_check_urls[key] = value
+        end
+      end      
     end
     
   end
@@ -619,12 +645,12 @@ function _M.limit(metrics, seconds, times)
   elseif "global_total_uris" == metrics then
     hits = get_global_total_uris_hits(timestamp_second, seconds)
   elseif "device_current_uri" == metrics then
-    if not is_device_id_valid(get_device_key()) then
+    if not is_device_id_valid(get_device_id(), get_device_key(), ngx.var.remote_addr, ngx.var.uri, ngx.time(), ngx.req.get_headers(), ngx.var.server_name, ngx.var.server_port) then
       return true
     end
     hits = get_device_current_uri_hits(get_device_key(), get_uri_key(), timestamp_second, seconds)
   elseif "device_total_uris" == metrics then
-    if not is_device_id_valid(get_device_key()) then
+    if not is_device_id_valid(get_device_id(), get_device_key(), ngx.var.remote_addr, ngx.var.uri, ngx.time(), ngx.req.get_headers(), ngx.var.server_name, ngx.var.server_port) then
       return true
     end
     hits = get_device_total_uris_hits(get_device_key(), timestamp_second, seconds)
@@ -643,13 +669,17 @@ function _M.check()
   if device_id == nil then
     return false
   end
+
+  local server_name = ngx.var.server_name
+  local server_port = ngx.var.server_port
   
-  if Configuration.device_id_check_uri == nil then
+  if get_check_url(server_name, server_port) == nil then
     return true
   end  
   
   local device_key = get_device_key()
   local remote_addr = ngx.var.remote_addr or ""
+  local req_uri = ngx.var.uri
   local req_headers = ngx.req.get_headers() or {}
   
   if ngx.ctx.device_ratelimit_device_id_valid == nil then
@@ -659,7 +689,7 @@ function _M.check()
     close_redis_client(client)
     
     if val == ngx.null then
-      ngx.ctx.device_ratelimit_device_id_valid = do_check_device_id(device_id, device_key, remote_addr, ngx.time(), req_headers)
+      ngx.ctx.device_ratelimit_device_id_valid = do_check_device_id(device_id, device_key, remote_addr, req_uri, ngx.time(), req_headers, server_name, server_port)
     else
       ngx.ctx.device_ratelimit_device_id_valid = boolean_value(val)
     end
