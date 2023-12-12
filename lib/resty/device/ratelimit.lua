@@ -1,7 +1,7 @@
 --[[
 Author: xuyd
 Date: 2023/10/23
-controlling the rate of requests based on the deviceId in the heade
+controlling the rate of requests based on the deviceId
 ]]
 local _M = {
   _VERSION = '0.33'
