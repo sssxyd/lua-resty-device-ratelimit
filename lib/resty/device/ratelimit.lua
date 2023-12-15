@@ -24,6 +24,7 @@ Configuration.redis = {
 }
 Configuration.uri_hit_min_expired_seconds = 60
 Configuration.device_id_header_name = nil
+Configuration.device_id_cookie_key = nil
 Configuration.default_device_check_url = nil
 Configuration.server_device_check_urls = {}
 
@@ -273,12 +274,19 @@ local function get_device_id()
     return ngx.ctx.device_ratelimit_device_id
   end
   
+  --get deviceId from header/cookie/remote_addr
   local device_id = nil
-  --If the device_id_header_name is not configured, the client's address is used as the deviceId
-  if string_isNullOrEmpty(Configuration.device_id_header_name) then
-    return ngx.var.remote_addr
-  else
+  
+  if not string_isNullOrEmpty(Configuration.device_id_header_name) then
     device_id = ngx.req.get_headers()[Configuration.device_id_header_name]
+  end
+  
+  if string_isNullOrEmpty(device_id) and string_isNullOrEmpty(Configuration.device_id_cookie_key) then
+    device_id = ngx.var["cookie_" .. Configuration.device_id_cookie_key]
+  end
+  
+  if Configuration.device_id_header_name == nil and Configuration.device_id_cookie_key == nil then
+    device_id = ngx.var.remote_addr
   end
   
   ngx.ctx.device_ratelimit_device_id = device_id
@@ -596,7 +604,8 @@ end
 -- redis_uri(required): redis :// [: password@] host [: port] [/ database][? [timeout=timeout[d|h|m|s|ms|us|ns]] [&database=database]]
 -- redis_conn_pool_size(optional): default 50, The size of the Redis connection pool
 -- redis_conn_idle_mills(optional): default 10000 (ms), The number of milliseconds a connection is idle in the connection pool
--- device_id_header_name(optional): The name of the HTTP Header in the Request that holds the deviceId， If not set, use the client's IP as the deviceId
+-- device_id_header_name(optional): The name of the HTTP Header in the Request that holds the deviceId
+-- device_id_cookie_key(optional): The cookie key if you save deviceId in cookie
 -- default_device_check_url(optional): The address for checking the legality of the deviceId, if a corresponding server configuration is not found in server_device_check_urls, then use this address
 -- server_device_check_urls(optional): Configure the address for checking the legality of the deviceId corresponding to different Server:Port
 -- }
@@ -624,6 +633,10 @@ function _M.config(config)
     
     if config.device_id_header_name ~= nil and not string_isNullOrEmpty(tostring(config.device_id_header_name)) then
       Configuration.device_id_header_name = tostring(config.device_id_header_name)
+    end
+    
+    if config.device_id_cookie_key ~= nil and not string_isNullOrEmpty(tostring(config.device_id_cookie_key)) then
+      Configuration.device_id_cookie_key = tostring(config.device_id_cookie_key)
     end
     
     if config.default_device_check_url ~= nil and isValidHttpUrl(tostring(config.default_device_check_url)) then

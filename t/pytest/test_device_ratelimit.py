@@ -6,7 +6,7 @@ import threading
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor
 
-global_device_rate_limit_server_host = "http://127.0.0.1:8200"
+global_device_rate_limit_server_host = "http://122.9.7.176:8200"
 global_device_id = None
 
 
