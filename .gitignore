@@ -39,3 +39,6 @@ luac.out
 *.x86_64
 *.hex
 
+/t/pytest/__pycache__
+/t/pytest/.idea
+/t/pytest/.pytest_cache

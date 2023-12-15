@@ -436,7 +436,7 @@ local function get_or_calc_hits(cache_key, redis_key_prefix, timestamp_second, s
   for i, res in ipairs(responses) do
     hits = hits + number_value(res)
   end
-  
+
   ngx.ctx.devie_ratelimit_cache_hits[cache_key] = hits
   return hits
 end
@@ -671,6 +671,9 @@ function _M.limit(metrics, seconds, times)
       return true
     end
     hits = get_device_total_uris_hits(get_device_key(), timestamp_second, seconds)
+  else
+    ngx.log(ngx.ERR, 'limit by metrics[' .. metrics .. '] is invalid!')
+    return false
   end
   
   if hits < 0 then
