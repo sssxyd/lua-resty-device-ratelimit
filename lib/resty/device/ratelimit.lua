@@ -4,7 +4,7 @@ Date: 2023/10/23
 controlling the rate of requests based on the deviceId
 ]]
 local _M = {
-  _VERSION = '0.33'
+  _VERSION = '1.0.1'
 }
 
 local redis = require("resty.redis")
@@ -147,15 +147,10 @@ local function close_redis_client(client)
 end
 
 local function get_alphanumeric_underscore_key(str)
-  str = str:gsub("[/%-.]", "_")
-  if str:find("%W") then
+  str = str:gsub("[/%. -]", "_")
+  if str:find("[^%a%d_]") or #str > 32 then
     return ngx.md5(str)
   end
-  
-  if #str > 32 then
-    return ngx.md5(str)
-  end
-  
   return str
 end
 
@@ -306,6 +301,23 @@ local function get_device_key()
   return ngx.ctx.device_ratelimit_device_key
 end
 
+local function get_server_key(server_name, server_port)
+  if server_name ~= nil and server_port ~= nil then
+    return get_alphanumeric_underscore_key(server_name) .. '_' .. server_port
+  end
+  
+  if ngx.ctx.device_ratelimit_server_key ~= nil then
+    return ngx.ctx.device_ratelimit_server_key
+  end
+  
+  ngx.ctx.device_ratelimit_server_key = get_alphanumeric_underscore_key(ngx.var.server_name) .. '_' .. ngx.var.server_port
+  return ngx.ctx.device_ratelimit_server_key
+end
+
+local function get_server_redis_key_prefix(server_key)
+  return "resty_" .. server_key .. "_drl_"
+end
+
 --Obtain the interface address for the deviceId check configured for a specific server
 local function get_check_url(server_name, server_port)
   local url = Configuration.server_device_check_urls[server_name .. ':' .. server_port]
@@ -315,7 +327,7 @@ local function get_check_url(server_name, server_port)
   return url
 end
 
-local function timer_incr_visit_hits(premature, timestamp_second, device_key, uri_key, metrics_expired_cache)
+local function timer_incr_visit_hits(premature, timestamp_second, server_key, device_key, uri_key, metrics_expired_cache)
   if premature then
     return
   end
@@ -330,14 +342,16 @@ local function timer_incr_visit_hits(premature, timestamp_second, device_key, ur
   local ttl3 = metrics_expired_cache["device_total_uris"] or Configuration.uri_hit_min_expired_seconds
   local ttl4 = metrics_expired_cache["device_current_uri"] or Configuration.uri_hit_min_expired_seconds
   
-  local key1 = "resty_device_ratelimit_global_" .. timestamp_second
-  local key2 = "resty_device_ratelimit_global_" .. uri_key .. "_" .. timestamp_second
+  local prefix = get_server_redis_key_prefix(server_key)
+  
+  local key1 = prefix .. "global_" .. timestamp_second
+  local key2 = prefix .. "global_" .. uri_key .. "_" .. timestamp_second
   local count = 2
   local key3 = nil
   local key4 = nil
   if device_key ~= nil then
-    key3 = "resty_device_ratelimit_" .. device_key .. "_" .. timestamp_second
-    key4 = "resty_device_ratelimit_" .. device_key .. "_" .. uri_key .. "_" .. timestamp_second
+    key3 = prefix .. device_key .. "_" .. timestamp_second
+    key4 = prefix .. device_key .. "_" .. uri_key .. "_" .. timestamp_second
     count = 4
   end
   
@@ -441,37 +455,37 @@ local function get_or_calc_hits(cache_key, redis_key_prefix, timestamp_second, s
   return hits
 end
 
-local function get_device_current_uri_hits(device_key, uri_key, timestamp_second, seconds)
+local function get_device_current_uri_hits(server_key, device_key, uri_key, timestamp_second, seconds)
   local cache_key = "current_uri_" .. timestamp_second .. "_" .. seconds
-  local redis_key_prefix = "resty_device_ratelimit_" .. device_key .. "_" .. uri_key .. "_"
+  local redis_key_prefix = get_server_redis_key_prefix(server_key) .. device_key .. "_" .. uri_key .. "_"
   return get_or_calc_hits(cache_key, redis_key_prefix, timestamp_second, seconds)
 end
 
-local function get_device_total_uris_hits(device_key, timestamp_second, seconds)
+local function get_device_total_uris_hits(server_key, device_key, timestamp_second, seconds)
   local cache_key = "total_uris_" .. timestamp_second .. "_" .. seconds
-  local redis_key_prefix = "resty_device_ratelimit_" .. device_key .. "_"
+  local redis_key_prefix = get_server_redis_key_prefix(server_key) .. device_key .. "_"
   return get_or_calc_hits(cache_key, redis_key_prefix, timestamp_second, seconds)  
 end
 
-local function get_global_current_uri_hits(uri_key, timestamp_second, seconds)
+local function get_global_current_uri_hits(server_key, uri_key, timestamp_second, seconds)
   local cache_key = "global_uri_" .. timestamp_second .. "_" .. seconds
-  local redis_key_prefix = "resty_device_ratelimit_global_" .. uri_key .. "_"
+  local redis_key_prefix = get_server_redis_key_prefix(server_key) .. "global_" .. uri_key .. "_"
   return get_or_calc_hits(cache_key, redis_key_prefix, timestamp_second, seconds)  
 end
 
-local function get_global_total_uris_hits(timestamp_second, seconds)
+local function get_global_total_uris_hits(server_key, timestamp_second, seconds)
   local cache_key = "global_uris_" .. timestamp_second .. "_" .. seconds
-  local redis_key_prefix = "resty_device_ratelimit_global_"
+  local redis_key_prefix = get_server_redis_key_prefix(server_key) .. "global_"
   return get_or_calc_hits(cache_key, redis_key_prefix, timestamp_second, seconds)
 end
 
-local function set_device_key_valid(device_key, is_valid, expired_seconds) 
+local function set_device_key_valid(server_key, device_key, is_valid, expired_seconds) 
   local client = get_redis_client()
   if client == nil then
     return
   end
   
-  local key = "resty_device_ratelimit_" .. device_key .. "_valid";
+  local key = get_server_redis_key_prefix(server_key) .. device_key .. "_valid";
   if expired_seconds == 0 then
     client:del(key)
   else
@@ -512,26 +526,28 @@ local function do_check_device_id(device_id, device_key, remote_addr, request_ur
       }
   })
 
+  local server_key = get_server_key(server_name, server_port)
+
   if not res then
     ngx.log(ngx.ERR, err)
-    set_device_key_valid(device_key, true, 60)
+    set_device_key_valid(server_key, device_key, true, 60)
     return true
   end
   
   if res.status ~= 200 then
-    set_device_key_valid(device_key, true, 60)
+    set_device_key_valid(server_key, device_key, true, 60)
     return true
   end
   
   local result, decode_err = cjson.decode(res.body)
   if not result or result.valid == nil then
-    set_device_key_valid(device_key, true, 60)
+    set_device_key_valid(server_key, device_key, true, 60)
     return true
   end
   
   local valid = boolean_value(result.valid)
   local expired_seconds = tonumber(result.expired_seconds) or 60
-  set_device_key_valid(device_key, valid, expired_seconds) 
+  set_device_key_valid(server_key, device_key, valid, expired_seconds) 
   
   return valid
 end
@@ -557,7 +573,7 @@ local function is_device_id_valid(device_id, device_key, remote_addr, req_uri, r
   if ngx.ctx.device_ratelimit_device_id_valid == nil then
     --Attempt to retrieve the verification status of the deviceId from Redis
     local client = get_redis_client()
-    local val = client:get("resty_device_ratelimit_" .. device_key .. "_valid")
+    local val = client:get(get_server_redis_key_prefix(get_server_key(server_name, server_port)) .. device_key .. "_valid")
     close_redis_client(client)
     
     if val == ngx.null then
@@ -657,20 +673,22 @@ function _M.limit(metrics, seconds, times)
     end
   end
   
+  local server_key = get_server_key() or ""
+  
   if "global_current_uri" == metrics then
-    hits = get_global_current_uri_hits(get_uri_key(), timestamp_second, seconds)
+    hits = get_global_current_uri_hits(server_key, get_uri_key(), timestamp_second, seconds)
   elseif "global_total_uris" == metrics then
-    hits = get_global_total_uris_hits(timestamp_second, seconds)
+    hits = get_global_total_uris_hits(server_key, timestamp_second, seconds)
   elseif "device_current_uri" == metrics then
     if not is_device_id_valid(get_device_id(), get_device_key(), ngx.var.remote_addr, ngx.var.uri, ngx.time(), ngx.req.get_headers(), ngx.var.server_name, ngx.var.server_port) then
       return true
     end
-    hits = get_device_current_uri_hits(get_device_key(), get_uri_key(), timestamp_second, seconds)
+    hits = get_device_current_uri_hits(server_key, get_device_key(), get_uri_key(), timestamp_second, seconds)
   elseif "device_total_uris" == metrics then
     if not is_device_id_valid(get_device_id(), get_device_key(), ngx.var.remote_addr, ngx.var.uri, ngx.time(), ngx.req.get_headers(), ngx.var.server_name, ngx.var.server_port) then
       return true
     end
-    hits = get_device_total_uris_hits(get_device_key(), timestamp_second, seconds)
+    hits = get_device_total_uris_hits(server_key, get_device_key(), timestamp_second, seconds)
   else
     ngx.log(ngx.ERR, 'limit by metrics[' .. metrics .. '] is invalid!')
     return false
@@ -732,15 +750,16 @@ function _M.record()
   if device_key == nil or uri_key == nil then
     return
   end
+  local server_key = get_server_key() or ""
   
   ngx.ctx.device_ratelimit_recorded = true
   
   local metrics_expired_cache = ngx.ctx.devie_ratelimit_metrics_expired_seconds_cache or {}
   
-  local ok, err = ngx.timer.at(0, timer_incr_visit_hits, ngx.time(), device_key, uri_key, metrics_expired_cache)
+  local ok, err = ngx.timer.at(0, timer_incr_visit_hits, ngx.time(), server_key, device_key, uri_key, metrics_expired_cache)
   if not ok then
       ngx.log(ngx.ERR, "failed to create timer: ", err)
-  end  
+  end
 end
 
 return _M
