@@ -4,12 +4,15 @@ Date: 2023/10/23
 controlling the rate of requests based on the deviceId
 ]]
 local _M = {
-  _VERSION = '1.0.1'
+  _VERSION = '0.3.4'
 }
 
 local redis = require("resty.redis")
 local http = require("resty.http")
 local cjson = require("cjson")
+local resty_aes = require("resty.aes")
+local resty_sha256 = require("resty.sha256")
+local resty_string = require("resty.string")
 
 local Configuration = {}
 Configuration.redis = {
@@ -24,7 +27,7 @@ Configuration.redis = {
 }
 Configuration.uri_hit_min_expired_seconds = 60
 Configuration.device_id_header_name = nil
-Configuration.device_id_cookie_key = nil
+Configuration.device_id_cookie_name = nil
 Configuration.default_device_check_url = nil
 Configuration.server_device_check_urls = {}
 
@@ -274,6 +277,7 @@ local function get_device_id()
     return ngx.ctx.device_ratelimit_device_id
   end
   
+  
   --get deviceId from header/cookie/remote_addr
   local device_id = nil
   
@@ -281,11 +285,11 @@ local function get_device_id()
     device_id = ngx.req.get_headers()[Configuration.device_id_header_name]
   end
   
-  if string_isNullOrEmpty(device_id) and string_isNullOrEmpty(Configuration.device_id_cookie_key) then
-    device_id = ngx.var["cookie_" .. Configuration.device_id_cookie_key]
+  if string_isNullOrEmpty(device_id) and string_isNullOrEmpty(Configuration.device_id_cookie_name) then
+    device_id = ngx.var["cookie_" .. Configuration.device_id_cookie_name]
   end
   
-  if Configuration.device_id_header_name == nil and Configuration.device_id_cookie_key == nil then
+  if Configuration.device_id_header_name == nil and Configuration.device_id_cookie_name == nil then
     device_id = ngx.var.remote_addr
   end
   
@@ -605,7 +609,7 @@ end
 -- redis_conn_pool_size(optional): default 50, The size of the Redis connection pool
 -- redis_conn_idle_mills(optional): default 10000 (ms), The number of milliseconds a connection is idle in the connection pool
 -- device_id_header_name(optional): The name of the HTTP Header in the Request that holds the deviceId
--- device_id_cookie_key(optional): The cookie key if you save deviceId in cookie
+-- device_id_cookie_name(optional): The cookie name if you save deviceId in cookie
 -- default_device_check_url(optional): The address for checking the legality of the deviceId, if a corresponding server configuration is not found in server_device_check_urls, then use this address
 -- server_device_check_urls(optional): Configure the address for checking the legality of the deviceId corresponding to different Server:Port
 -- }
@@ -635,8 +639,8 @@ function _M.config(config)
       Configuration.device_id_header_name = tostring(config.device_id_header_name)
     end
     
-    if config.device_id_cookie_key ~= nil and not string_isNullOrEmpty(tostring(config.device_id_cookie_key)) then
-      Configuration.device_id_cookie_key = tostring(config.device_id_cookie_key)
+    if config.device_id_cookie_name ~= nil and not string_isNullOrEmpty(tostring(config.device_id_cookie_name)) then
+      Configuration.device_id_cookie_name = tostring(config.device_id_cookie_name)
     end
     
     if config.default_device_check_url ~= nil and isValidHttpUrl(tostring(config.default_device_check_url)) then
@@ -773,6 +777,128 @@ function _M.record()
   if not ok then
       ngx.log(ngx.ERR, "failed to create timer: ", err)
   end
+end
+
+
+function _M.set_response_cookie(name, value, expires, path, domain)
+  expires = tonumber(expires) or 0
+  
+  local cookie = name .. "=" .. ngx.escape_uri(value)
+  if expires > 0 then
+      cookie = cookie .. "; Expires=" .. ngx.cookie_time(expires)
+  end
+  
+  if string_isNullOrEmpty(path) then
+    path = "/"
+  end
+  cookie = cookie .. "; Path=" .. path
+  if domain then
+      cookie = cookie .. "; Domain=" .. domain
+  end
+
+  
+  local cookies = ngx.header["Set-Cookie"]
+  if type(cookies) == "table" then
+      table.insert(cookies, cookie)
+  elseif cookies then
+      ngx.header["Set-Cookie"] = {cookies, cookie}
+  else
+      ngx.header["Set-Cookie"] = cookie
+  end
+end
+
+-- AES256/CBC/PKCS7Padding, return hex encrypted data
+function _M.encrypt(data, secret)
+  if string_isNullOrEmpty(data) or string_isNullOrEmpty(secret) then
+    return data
+  end
+  
+  -- key = sha256(secret)
+  local sha256 = resty_sha256:new()
+  sha256:update(secret)
+  local key = sha256:final()
+  
+  -- iv = md5(secret):sub(1,16)
+  local iv = ngx.md5(secret):sub(1, 16)  
+  
+  local aes_256_cbc_with_padding = resty_aes:new(key, nil, resty_aes.cipher(256, "cbc"), { iv = iv })
+  local encrypted = aes_256_cbc_with_padding:encrypt(data)
+  return resty_string.to_hex(encrypted)
+end
+
+function _M.decrypt(encrypt_hex, secret)
+  if string_isNullOrEmpty(encrypt_hex) or string_isNullOrEmpty(secret) then
+    return encrypt_hex
+  end
+  
+  -- key = sha256(secret)
+  local sha256 = resty_sha256:new()
+  sha256:update(secret)
+  local key = sha256:final()
+  
+  -- iv = md5(secret):sub(1,16)
+  local iv = ngx.md5(secret):sub(1, 16)  
+  
+  local aes_256_cbc_with_padding = resty_aes:new(key, nil, resty_aes.cipher(256, "cbc"), { iv = iv })
+  
+  local encrypted_data = encrypt_hex:gsub('..', function(h) return string.char(tonumber(h, 16)) end)
+  return aes_256_cbc_with_padding:encrypt(encrypted_data)
+end
+
+
+--The backend_url must be a real address and does not accept upstream variables
+function _M.proxy_pass(backend_url)
+  local httpc = http.new()
+  local req_method = ngx.req.get_method()
+  local req_headers = ngx.req.get_headers()
+  
+  req_headers["Connection"] = nil
+  req_headers["Host"] = ngx.var.host .. ':' .. ngx.var.server_port
+  req_headers["X-Real-IP"] = ngx.var.remote_addr
+  req_headers["X-Real-PORT"] = ngx.var.remote_port
+  local x_forwarded_for = req_headers["X-Forwarded-For"]
+  if x_forwarded_for then
+    x_forwarded_for = x_forwarded_for .. ", " .. ngx.var.remote_addr
+  else
+    x_forwarded_for = ngx.var.remote_addr
+  end
+  req_headers["X-Forwarded-For"] = x_forwarded_for
+  
+  ngx.req.read_body()
+  
+  local pass_url = backend_url:gsub("/+$", "") .. ngx.var.uri
+  if ngx.var.query_string then
+    pass_url = pass_url .. "?" .. ngx.var.query_string
+  end
+
+  local res, err = httpc:request_uri(pass_url, {
+    method = req_method,
+    headers = req_headers,
+    body = ngx.req.get_body_data(),
+    keepalive_timeout = 60,
+    keepalive_pool = 10
+  })
+
+  if not res then
+    res = {
+      status = 500,
+      headers = {},
+      body = err
+    }
+    res.header['Content-Type'] = "text/plain;charset=utf-8"
+    ngx.log(ngx.ERR, "proxy_pass[" .. backend_url .. "] failed", err)
+  end
+  
+  ngx.status = res.status
+  
+  res.headers["Transfer-Encoding"] = nil
+  res.headers["Connection"] = nil
+
+  for k, v in pairs(res.headers) do
+    ngx.header[k] = v
+  end
+
+  return res
 end
 
 return _M
