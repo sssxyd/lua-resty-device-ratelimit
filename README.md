@@ -243,7 +243,7 @@ server_device_check_urls: { ["server_name:listen_port"] = "your validate device 
 2. Please ensure that the DeviceId you set is verifiable on the server.
 
 ### Implement Validate DeviceId URI
-Implement an interface to verify the validity of the deviceId. This interface should receive a JSON via POST and return a JSON
+Implement an interface to verify the validity of the deviceId. This interface should receive a JSON via POST and return a JSON  
 Received JSON
 ```json
 {
@@ -251,7 +251,7 @@ Received JSON
 "remote_addr": "client ip",
 "request_uri": "request uri",
 "request_time": "unix timestamp",
-"request_headers": {...},
+"request_headers": {"x-device-id":"your device id", "other-header":""},
 "server_name": "server_name defined in server block",
 "server_port": "listening port defined in server block"
 }
@@ -259,8 +259,8 @@ Received JSON
 Response JSON
 ```json
 {
-    valid: true/false,
-    expired: unix_timestamp_expired_this_device_id
+    valid: true,
+    expired: 3600
 }
 ```
 
