@@ -259,17 +259,71 @@ Received JSON
 Response JSON
 ```json
 {
-    valid: true,
-    expired: 3600
+    "valid": true,
+    "expired": 3600
 }
 ```
 
-
 ### Check And Limit Your URIs
+`vim /etc/nginx/conf.d/your-site.conf`
+```
+    # no limit
+    location /ajax/guest/ {
+        rewrite /ajax/(.*) /$1 break;
+        proxy_pass http://backend-server:8080;
+    }
 
-## Rate Limiting Metrics
+    # Limit within the entire site, each interface to a maximum of 4 accesses within 10 seconds
+    location /ajax/io/ {
+        access_by_lua_block {
+            local drl = require("resty.device.ratelimit")
+            if not drl.check() then
+                ngx.exit(401)
+            end
+            if drl.limit("global_current_uri", 10, 4) then
+                ngx.exit(503)
+            end
+            drl.record()
+        }
+        rewrite /ajax/(.*) /$1 break;
+        proxy_pass http://backend-server:8080;
+    }
 
-## Rate Limiting API Specification
+    # Limit a single device to a maximum of 1 access per interface within 1 seconds
+    location /ajax/key/ {
+        access_by_lua_block {
+            local drl = require("resty.device.ratelimit")
+            if not drl.check() then
+                ngx.exit(401)
+            end
+            if drl.limit("device_current_uri", 1, 1) then
+                ngx.exit(429)
+            end
+            drl.record()
+        }
+        rewrite /ajax/(.*) /$1 break;
+        proxy_pass http://backend-server:8080;
+    }
 
-## Check Device ID API Specification
+    # Limit a single device to a maximum of 1 access per interface within 3 seconds, and a total of no more than 40 accesses across all interfaces within 10 seconds
+    location /ajax/ {
+        access_by_lua_block {
+            local drl = require("resty.device.ratelimit")
+            if not drl.check() then
+                ngx.exit(401)
+            end
+            if drl.limit("device_current_uri", 3, 1) or drl.limit("device_total_uris", 10, 40) then
+                ngx.exit(429)
+            end
+            drl.record()
+        }
+        rewrite /ajax/(.*) /$1 break;
+        proxy_pass http://backend-server:8080;
+    }
+
+    location / {
+        try_files $uri  $uri/ /index.html;
+    }
+```
+
 
