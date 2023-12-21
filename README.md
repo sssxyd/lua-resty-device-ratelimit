@@ -54,10 +54,160 @@ server_device_check_urls: { ["server_name:listen_port"] = "your validate device 
 ```
 
 ### Proxy Your Login URI
+`vim /etc/nginx/conf.d/yoursite.conf`
+```
+    location /ajax/login {
+        rewrite /ajax/(.*) /$1 break;
+        access_by_lua_block {
+            local cjson = require("cjson")
+            local drl = require("resty.device.ratelimit")
+            local secret = "Your_Secret_For_Encrypt"
+
+            local res = drl.proxy_pass("http://backend-server:8080")
+            
+            if res.status ~= 200 then
+                ngx.say(res.body)
+                ngx.exit(res.status)
+            end
+            --Assume that your login interface returns a JSON format as follows：
+            --{ "code":1, "message":"", "result":{"userId":156, ...} }
+            local apiResponse = cjson.decode(res.body)
+            if apiResponse and (tonumber(apiResponse.code) or 0) == 1 then
+                local result = apiResponse.result
+                if result and result.userId then
+                    local now = os.date("*t") 
+                    local tomorrow_end = os.time({year = now.year, month = now.month, day = now.day + 1, hour = 23, min = 59, sec = 59})
+                    local data = {
+                        userId = result.userId,
+                        expired = tomorrow_end
+                    }
+                    local deviceId = drl.encrypt(cjson.encode(data), secret)
+                    drl.set_response_cookie("deviceId", deviceId, tomorrow_end)
+                end
+            end
+            
+            ngx.say(res.body)
+            ngx.exit(res.status)
+        }
+    }
+```
 
 ### Create Validate DeviceId URI
+`vim /etc/nginx/conf.d/yoursite.conf`
+```
+    location /check-device-id {
+        allow  127.0.0.1;
+        deny  all;
 
+        access_by_lua_block {
+            local cjson = require("cjson")
+            local drl = require("resty.device.ratelimit")
+            local secret = "Your_Secret_For_Encrypt"
+            
+            local response = {
+                valid = false,
+                expired_seconds = 1800
+            }
+
+            ngx.req.read_body()
+            local body_data = ngx.req.get_body_data()
+            local args, err
+            if not body_data then
+                err = "failed to read request body"
+            else
+                args, err = cjson.decode(body_data)
+            end
+            if not args then
+                ngx.log(ngx.ERR, "failed to decode JSON: ", err)
+                args = {}
+            end
+
+            local encrypted_data_hex = args.device_id or ""
+            if encrypted_data_hex ~= "" then
+                local datajson = drl.decrypt(encrypted_data_hex, secret)
+                if datajson then
+                    local data = cjson.decode(datajson)
+                    if data then
+                        local expired = tonumber(data.expired) or 0
+                        local expired_seconds = expired - os.time()
+                        if expired_seconds < 0 then
+                            response.valid = false
+                            response.expired_seconds = 0
+                        else
+                            response.valid = true
+                            response.expired_seconds = expired_seconds
+                        end
+                    end
+                end
+            end
+            
+            ngx.header.content_type = 'application/json; charset=utf-8'
+            ngx.say(cjson.encode(response))
+            ngx.exit(200)
+        }
+    }
+```
 ### Check And Limit Your URIs
+`vim /etc/nginx/conf.d/yoursite.conf`
+```
+    # no limit
+    location /ajax/guest/ {
+        rewrite /ajax/(.*) /$1 break;
+        proxy_pass http://backend-server:8080;
+    }
+
+    # Limit within the entire site, each interface to a maximum of 4 accesses within 10 seconds
+    location /ajax/io/ {
+        access_by_lua_block {
+            local drl = require("resty.device.ratelimit")
+            if not drl.check() then
+                ngx.exit(401)
+            end
+            if drl.limit("global_current_uri", 10, 4) then
+                ngx.exit(503)
+            end
+            drl.record()
+        }
+        rewrite /ajax/(.*) /$1 break;
+        proxy_pass http://backend-server:8080;
+    }
+
+    # Limit a single device to a maximum of 1 access per interface within 1 seconds
+    location /ajax/key/ {
+        access_by_lua_block {
+            local drl = require("resty.device.ratelimit")
+            if not drl.check() then
+                ngx.exit(401)
+            end
+            if drl.limit("device_current_uri", 1, 1) then
+                ngx.exit(429)
+            end
+            drl.record()
+        }
+        rewrite /ajax/(.*) /$1 break;
+        proxy_pass http://backend-server:8080;
+    }
+
+    # Limit a single device to a maximum of 1 access per interface within 3 seconds, and a total of no more than 40 accesses across all interfaces within 10 seconds
+    location /ajax/ {
+        access_by_lua_block {
+            local drl = require("resty.device.ratelimit")
+            if not drl.check() then
+                ngx.exit(401)
+            end
+            if drl.limit("device_current_uri", 3, 1) or drl.limit("device_total_uris", 10, 40) then
+                ngx.exit(429)
+            end
+            drl.record()
+        }
+        rewrite /ajax/(.*) /$1 break;
+        proxy_pass http://backend-server:8080;
+    }
+
+    location / {
+        try_files $uri  $uri/ /index.html;
+    }
+```
 
 ## Intrusive Configuration
 ### Demo
