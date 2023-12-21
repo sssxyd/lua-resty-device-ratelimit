@@ -6,17 +6,17 @@ import threading
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor
 
-global_device_rate_limit_server_host = "http://122.9.7.176:8200"
+global_device_rate_limit_server_host = "http://122.9.7.176:8400"
 global_device_id = None
 
 
 def login_and_get_device_id(user_id):
     response = requests.get(global_device_rate_limit_server_host + "/ajax/login?userId=" + str(user_id))
-    assert response.status_code == 200, "device_rate_limit_server invalid!"
-    data = response.json()
-    assert data["deviceId"], "deviceId required!"
+    assert response.status_code == 200, "zero_intrusion_server invalid!"
+    print("cookies:" + response.cookies.get("deviceId"))
+    assert response.cookies.get("deviceId"), "deviceId required!"
     global global_device_id
-    global_device_id = data["deviceId"]
+    global_device_id = response.cookies.get("deviceId")
     return global_device_id
 
 
@@ -43,18 +43,17 @@ def visit_ajax_api(api_type=None, command=None):
     api = api_type + "/" + command
 
     if global_device_id is not None and 'guest' != api_type:
-        headers = {
-            'x-device-id': str(global_device_id)
+        cookies = {
+            'deviceId': str(global_device_id)
         }
         print(datetime.now().strftime("%Y/%m/%d %H:%M:%S") + " " + global_device_rate_limit_server_host + "/ajax/" + api + " with deviceId:" + str(
             global_device_id))
-        return requests.get(global_device_rate_limit_server_host + "/ajax/" + api, headers=headers)
+        return requests.get(global_device_rate_limit_server_host + "/ajax/" + api, cookies=cookies)
     else:
         print(datetime.now().strftime("%Y/%m/%d %H:%M:%S") + " " + global_device_rate_limit_server_host + "/ajax/" + api)
         return requests.get(global_device_rate_limit_server_host + "/ajax/" + api)
 
 
-# guest api no limit
 def test_guest_api_limit():
     print(datetime.now().strftime("%Y/%m/%d %H:%M:%S") + " test_guest_api_limit")
 
