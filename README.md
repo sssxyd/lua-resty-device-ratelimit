@@ -1,7 +1,15 @@
-# lua-resty-device-ratelimit
-Using OpenResty, add non-intrusive client interface access permissions and rate limits to your site.
+Name
+=================
+lua-resty-device-ratelimit: Using OpenResty, add non-intrusive client interface access permissions and rate limits to your site.
 
-## Install OpenResty and Modules
+Table of Contents
+=================
+* [Requirements](#Requirements)
+* [Non-Intrusive](#Non-Intrusive)
+* [Intrusive](#Intrusive)
+
+Requirements
+=================
 Please follow the official documentation to install OpenResty
 Then, install the following modules:
 
@@ -30,7 +38,8 @@ systemctl enable openresty
 
 ```
 
-## Non-Intrusive Configuration
+Non-Intrusive
+=================
 ### Demo
 - [nginx.conf](./t/zero-intrusion-demo/usr/local/openresty/nginx/conf/nginx.conf)
 - [your-site.conf](./t/zero-intrusion-demo/etc/nginx/conf.d/zero-intrusion-ratelimit.conf)
@@ -215,7 +224,8 @@ server_device_check_urls: { ["server_name:listen_port"] = "your validate device 
     }
 ```
 
-## Intrusive Configuration
+Intrusive
+=================
 ### Demo
 - [nginx.conf](./t/demo-server/usr/local/openresty/nginx/conf/nginx.conf)
 - [your-site.conf](./t/demo-server/etc/nginx/conf.d/device-ratelimit.conf)
