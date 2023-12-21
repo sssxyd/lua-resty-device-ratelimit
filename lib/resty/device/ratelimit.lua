@@ -178,6 +178,7 @@ local function parse_redis_uri(uri)
     return nil
   end
   
+  --[: password@]
   str = str:sub(idx+3)
   if string_startsWith(str, ":") then
     str = str:sub(2)
@@ -193,32 +194,42 @@ local function parse_redis_uri(uri)
     end
   end
   
+  --host [: port]
   local host = nil
   local port = 6379
-  idx = string_indexOf(str, ":")
+  idx = string_indexOf(str, "/")
   if idx > 1 then
     host = string_trim(str:sub(1, idx-1))
-    str = str:sub(idx+1)
-    idx = string_indexOf(str, "/")
+    str = string_trim(str:sub(idx+1))
+  else
+    idx = string_indexOf(str, "?")
     if idx > 1 then
-      port = tonumber(string_trim(str:sub(1, idx-1))) or 6379
-      str = str:sub(idx+1)
+      host = string_trim(str:sub(1, idx-1))
+      str = string_trim(str:sub(idx))
     else
-      port = tonumber(str) or 6379
+      host = str
       str = ""
     end
-  else
-    idx = string_indexOf(str, "/")
-    host = string_trim(str:sub(1, idx-1))
-    str = str:sub(idx+1)
   end
+  idx = string_indexOf(host, ":")
+  if idx > 1 then
+    host = string_trim(host:sub(1, idx-1))
+    port = tonumber(string_trim(host:sub(idx+1))) or 6379
+  end  
   
+  --[/ database]
   local database = 0
   idx = string_indexOf(str, "?")
-  if idx > 1 then
+  if idx == 1 then
+    database = 0
+    str = string_trim(str:sub(2))
+  elseif idx > 1 then
     database = tonumber(string_trim(str:sub(1, idx-1))) or 0
     str = string_trim(str:sub(idx+1))
-  end  
+  else
+    database = tonumber(string_trim(str)) or 0
+    str = ""
+  end
 
   local options = {}
   for key, value in str:gmatch("([^&=]+)=([^&=]+)") do
@@ -242,7 +253,7 @@ local function parse_redis_uri(uri)
               options.timeout = time
           end
       elseif key == "database" then
-          database = tonumber(key) or 0
+          database = tonumber(value) or 0
       end
   end
 
@@ -277,7 +288,6 @@ local function get_device_id()
     return ngx.ctx.device_ratelimit_device_id
   end
   
-  
   --get deviceId from header/cookie/remote_addr
   local device_id = nil
   
@@ -285,7 +295,7 @@ local function get_device_id()
     device_id = ngx.req.get_headers()[Configuration.device_id_header_name]
   end
   
-  if string_isNullOrEmpty(device_id) and string_isNullOrEmpty(Configuration.device_id_cookie_name) then
+  if string_isNullOrEmpty(device_id) and not string_isNullOrEmpty(Configuration.device_id_cookie_name) then
     device_id = ngx.var["cookie_" .. Configuration.device_id_cookie_name]
   end
   
