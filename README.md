@@ -36,20 +36,7 @@ systemctl enable openresty
 - [your-site.conf](./t/zero-intrusion-demo/etc/nginx/conf.d/zero-intrusion-ratelimit.conf)
 
 ### Config
-
-### Proxy Your Login URI
-
-### Create Validate DeviceId URI
-
-### Check And Limit Your URIs
-
-## Intrusive Configuration
-### Demo
-- [nginx.conf](./t/demo-server/usr/local/openresty/nginx/conf/nginx.conf)
-- [your-site.conf](./t/demo-server/etc/nginx/conf.d/device-ratelimit.conf)
-
-### Config
-```lua
+```lua /usr/local/openresty/nginx/conf/nginx.conf
     init_by_lua_block {
         local drl = require("resty.device.ratelimit")
         --redis_uri: redis :// [: password@] host [: port] [/ database][? [timeout=timeout[d|h|m|s|ms|us|ns]] [&database=database]]
@@ -63,6 +50,20 @@ systemctl enable openresty
         })
     }
 ```
+
+### Proxy Your Login URI
+
+### Create Validate DeviceId URI
+
+### Check And Limit Your URIs
+
+## Intrusive Configuration
+### Demo
+- [nginx.conf](./t/demo-server/usr/local/openresty/nginx/conf/nginx.conf)
+- [your-site.conf](./t/demo-server/etc/nginx/conf.d/device-ratelimit.conf)
+
+### Config
+
 
 ### Define The DeviceId
 
