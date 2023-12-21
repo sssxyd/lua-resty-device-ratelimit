@@ -54,7 +54,7 @@ server_device_check_urls: { ["server_name:listen_port"] = "your validate device 
 ```
 
 ### Proxy Your Login URI
-`vim /etc/nginx/conf.d/yoursite.conf`
+`vim /etc/nginx/conf.d/your-site.conf`
 ```
     location /ajax/login {
         rewrite /ajax/(.*) /$1 break;
@@ -96,7 +96,7 @@ server_device_check_urls: { ["server_name:listen_port"] = "your validate device 
 ```
 
 ### Create Validate DeviceId URI
-`vim /etc/nginx/conf.d/yoursite.conf`
+`vim /etc/nginx/conf.d/your-site.conf`
 ```
     location /check-device-id {
         allow  127.0.0.1;
@@ -154,7 +154,7 @@ server_device_check_urls: { ["server_name:listen_port"] = "your validate device 
     }
 ```
 ### Check And Limit Your URIs
-`vim /etc/nginx/conf.d/yoursite.conf`
+`vim /etc/nginx/conf.d/your-site.conf`
 ```
     # no limit
     location /ajax/guest/ {
