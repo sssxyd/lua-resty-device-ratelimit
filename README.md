@@ -221,11 +221,49 @@ server_device_check_urls: { ["server_name:listen_port"] = "your validate device 
 - [your-site.conf](./t/demo-server/etc/nginx/conf.d/device-ratelimit.conf)
 
 ### Config
+`vim /usr/local/openresty/nginx/conf/nginx.conf`  
+redis_uri: redis :// [: password@] host [: port] [/ database][? [timeout=timeout[d|h|m|s|ms|us|ns]]  
+server_device_check_urls: { ["server_name:listen_port"] = "your validate device uri for this site"}  
 
+```lua
+    init_by_lua_block {
+        local drl = require("resty.device.ratelimit")
+        drl.config({
+            redis_uri = "redis://:YourRedisPassword@127.0.0.1:6379/0",
+            device_id_header_name = "x-device-id",
+            server_device_check_urls = {
+                ["www.yoursite.com:80"] = "http://backend-server:8080/your-validate-device-id-api"
+            }
+        })
+    }
+```
 
 ### Define The DeviceId
+1. Please ensure that the DeviceId is unique.
+2. Please ensure that the DeviceId you set is verifiable on the server.
 
 ### Implement Validate DeviceId URI
+Implement an interface to verify the validity of the deviceId. This interface should receive a JSON via POST and return a JSON
+Received JSON
+```json
+{
+"device_id": "device id",
+"remote_addr": "client ip",
+"request_uri": "request uri",
+"request_time": "unix timestamp",
+"request_headers": {...},
+"server_name": "server_name defined in server block",
+"server_port": "listening port defined in server block"
+}
+```
+Response JSON
+```json
+{
+    valid: true/false,
+    expired: unix_timestamp_expired_this_device_id
+}
+```
+
 
 ### Check And Limit Your URIs
 
