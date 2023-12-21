@@ -11,7 +11,7 @@ Then, install the following modules:
 
 For CentOS, you can install them using the following commands:
 
-<pre lang="no-highlight"><code>
+```bash
 yum install -y yum-utils
 
 # For CentOS 8 or older
@@ -28,7 +28,7 @@ opm get pintsized/lua-resty-device-ratelimit
 
 systemctl enable openresty
 
-</code></pre>
+```
 
 ## Non-Intrusive Configuration
 ### Demo
@@ -36,11 +36,13 @@ systemctl enable openresty
 - [your-site.conf](./t/zero-intrusion-demo/etc/nginx/conf.d/zero-intrusion-ratelimit.conf)
 
 ### Config
-```lua /usr/local/openresty/nginx/conf/nginx.conf
+vim /usr/local/openresty/nginx/conf/nginx.conf
+redis_uri: redis :// [: password@] host [: port] [/ database][? [timeout=timeout[d|h|m|s|ms|us|ns]] 
+server_device_check_urls: { ["server_name:listen_port"] = "your validate device uri for this site"}
+
+```lua
     init_by_lua_block {
         local drl = require("resty.device.ratelimit")
-        --redis_uri: redis :// [: password@] host [: port] [/ database][? [timeout=timeout[d|h|m|s|ms|us|ns]] [&database=database]]
-        --server_device_check_urls: { ["server_name:listen_port"] = "your validate device uri for this site"}
         drl.config({
             redis_uri = "redis://:YourRedisPassword@127.0.0.1:6379/0",
             device_id_cookie_name = "CookieNameForDeviceId",
