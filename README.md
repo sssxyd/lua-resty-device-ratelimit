@@ -36,9 +36,9 @@ systemctl enable openresty
 - [your-site.conf](./t/zero-intrusion-demo/etc/nginx/conf.d/zero-intrusion-ratelimit.conf)
 
 ### Config
-vim /usr/local/openresty/nginx/conf/nginx.conf
-redis_uri: redis :// [: password@] host [: port] [/ database][? [timeout=timeout[d|h|m|s|ms|us|ns]] 
-server_device_check_urls: { ["server_name:listen_port"] = "your validate device uri for this site"}
+`vim /usr/local/openresty/nginx/conf/nginx.conf`  
+redis_uri: redis :// [: password@] host [: port] [/ database][? [timeout=timeout[d|h|m|s|ms|us|ns]]  
+server_device_check_urls: { ["server_name:listen_port"] = "your validate device uri for this site"}  
 
 ```lua
     init_by_lua_block {
