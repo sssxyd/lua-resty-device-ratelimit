@@ -10,7 +10,7 @@ Table of Contents
 
 Requirements
 =================
-Please follow the official documentation to install OpenResty
+Please follow the [official documentation](https://openresty.org/en/installation.html) to install OpenResty
 Then, install the following modules:
 
 1. openresty/lua-resty-redis
