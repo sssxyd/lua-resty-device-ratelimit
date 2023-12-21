@@ -47,7 +47,7 @@ server_device_check_urls: { ["server_name:listen_port"] = "your validate device 
             redis_uri = "redis://:YourRedisPassword@127.0.0.1:6379/0",
             device_id_cookie_name = "CookieNameForDeviceId",
             server_device_check_urls = {
-                ["www.yoursite.com:443"] = "http://backend-server:8080/check-device-id"
+                ["www.yoursite.com:80"] = "http://www.yoursite.com/check-device-id"
             }
         })
     }
@@ -63,12 +63,14 @@ server_device_check_urls: { ["server_name:listen_port"] = "your validate device 
             local drl = require("resty.device.ratelimit")
             local secret = "Your_Secret_For_Encrypt"
 
+            -- pass this uri to backend
             local res = drl.proxy_pass("http://backend-server:8080")
             
             if res.status ~= 200 then
                 ngx.say(res.body)
                 ngx.exit(res.status)
             end
+
             --Assume that your login interface returns a JSON format as follows：
             --{ "code":1, "message":"", "result":{"userId":156, ...} }
             local apiResponse = cjson.decode(res.body)
@@ -81,6 +83,7 @@ server_device_check_urls: { ["server_name:listen_port"] = "your validate device 
                         userId = result.userId,
                         expired = tomorrow_end
                     }
+                    -- encrypt userId and expiredTime as deviceId (hex format)
                     local deviceId = drl.encrypt(cjson.encode(data), secret)
                     drl.set_response_cookie("deviceId", deviceId, tomorrow_end)
                 end
@@ -103,12 +106,14 @@ server_device_check_urls: { ["server_name:listen_port"] = "your validate device 
             local cjson = require("cjson")
             local drl = require("resty.device.ratelimit")
             local secret = "Your_Secret_For_Encrypt"
-            
+
+            -- default response body
             local response = {
                 valid = false,
                 expired_seconds = 1800
             }
 
+            -- get deviceId from post json
             ngx.req.read_body()
             local body_data = ngx.req.get_body_data()
             local args, err
@@ -122,6 +127,7 @@ server_device_check_urls: { ["server_name:listen_port"] = "your validate device 
                 args = {}
             end
 
+            -- decrypt deviceId and response 
             local encrypted_data_hex = args.device_id or ""
             if encrypted_data_hex ~= "" then
                 local datajson = drl.decrypt(encrypted_data_hex, secret)
