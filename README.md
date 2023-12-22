@@ -291,16 +291,19 @@ Response JSON
         proxy_pass http://backend-server:8080;
     }
 
-    # Limit within the entire site, each interface to a maximum of 4 accesses within 10 seconds
+    # limit within the entire site, each uri to a maximum of 4 accesses within 10 seconds 
     location /ajax/io/ {
         access_by_lua_block {
             local drl = require("resty.device.ratelimit")
+            -- 1. no deviceId or deviceId is invalid, exit with HTTP Status Code 401
             if not drl.check() then
                 ngx.exit(401)
             end
+            -- 2. if access count of current uri >= 4 times in latest 10 seconds within the entire site 
             if drl.limit("global_current_uri", 10, 4) then
                 ngx.exit(503)
             end
+            -- 3. asynchronously log this visit and continue execution 
             drl.record()
         }
         rewrite /ajax/(.*) /$1 break;
