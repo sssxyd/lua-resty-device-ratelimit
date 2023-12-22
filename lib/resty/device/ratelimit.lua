@@ -731,7 +731,7 @@ end
 
 --Synchronously verify the legality of the deviceId; 
 --Please note that：
---1. If no address for verifying the deviceId is found, or if the call to that address times out or fails, then return true
+--1. If no uri for verifying the deviceId is found, or if the call to that uri times out or fails, then return true
 --2. Even if this method is not called, the legality of the deviceId will still be verified asynchronously
 function _M.check()
   local device_id = get_device_id()
