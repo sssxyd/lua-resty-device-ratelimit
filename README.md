@@ -253,6 +253,7 @@ server_device_check_urls: { ["server_name:listen_port"] = "your validate device 
 ### Define The DeviceId
 1. Please ensure that the DeviceId is unique.
 2. Please ensure that the DeviceId you set is verifiable on the server.
+3. Please ensure that when the client sends a request, the deviceId is included in the request header.
 
 ### Implement Validate DeviceId URI
 Implement an interface to verify the validity of the deviceId. This interface should receive a JSON via POST and return a JSON  
