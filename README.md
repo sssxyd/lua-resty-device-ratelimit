@@ -262,6 +262,7 @@ server_device_check_urls: { ["server_name:listen_port"] = "your validate device 
 
 ### Implement Validate DeviceId URI
 Implement an interface to verify the validity of the deviceId. This interface should receive a JSON via POST and return a JSON  
+
 Received JSON
 ```json
 {
