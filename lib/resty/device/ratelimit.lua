@@ -789,6 +789,9 @@ function _M.record()
   end
 end
 
+function _M.set_response_header(name, value)
+  ngx.header[name] = value
+end
 
 function _M.set_response_cookie(name, value, expires, path, domain)
   expires = tonumber(expires) or 0
