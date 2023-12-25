@@ -4,7 +4,7 @@ Date: 2023/10/23
 Using OpenResty, add non-intrusive client interface access permissions and rate limits to your site.
 ]]
 local _M = {
-  _VERSION = '0.3.4'
+  _VERSION = '0.3.5'
 }
 
 local redis = require("resty.redis")
