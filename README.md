@@ -1,6 +1,6 @@
 Name
 =================
-lua-resty-device-ratelimit: Using OpenResty, add non-intrusive client interface access permissions and rate limits to your webapp.
+lua-resty-device-ratelimit: Using OpenResty, Non-invasive way to add client device access restrictions to an existing web app.
 
 Table of Contents
 =================
