@@ -43,8 +43,8 @@ systemctl enable openresty
 Non-Intrusive
 =================
 ### Demo
-- [nginx.conf](./t/zero-intrusion-demo/usr/local/openresty/nginx/conf/nginx.conf)
-- [your-site.conf](./t/zero-intrusion-demo/etc/nginx/conf.d/zero-intrusion-ratelimit.conf)
+- [nginx.conf](https://github.com/sssxyd/lua-resty-device-ratelimit/blob/main/t/zero-intrusion-demo/usr/local/openresty/nginx/conf/nginx.conf)
+- [your-site.conf](https://github.com/sssxyd/lua-resty-device-ratelimit/blob/main/t/zero-intrusion-demo/etc/nginx/conf.d/zero-intrusion-ratelimit.conf)
 
 ### Config
 `vim /usr/local/openresty/nginx/conf/nginx.conf`  
@@ -234,8 +234,8 @@ server_device_check_urls: { ["server_name:listen_port"] = "your validate device 
 Intrusive
 =================
 ### Demo
-- [nginx.conf](./t/demo-server/usr/local/openresty/nginx/conf/nginx.conf)
-- [your-site.conf](./t/demo-server/etc/nginx/conf.d/device-ratelimit.conf)
+- [nginx.conf](https://github.com/sssxyd/lua-resty-device-ratelimit/blob/main/t/demo-server/usr/local/openresty/nginx/conf/nginx.conf)
+- [your-site.conf](https://github.com/sssxyd/lua-resty-device-ratelimit/blob/main/t/demo-server/etc/nginx/conf.d/device-ratelimit.conf)
 
 ### Config
 `vim /usr/local/openresty/nginx/conf/nginx.conf`  
