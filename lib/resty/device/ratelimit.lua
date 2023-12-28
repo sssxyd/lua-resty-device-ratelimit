@@ -4,7 +4,7 @@ Date: 2023/10/23
 Using OpenResty, add non-intrusive client interface access permissions and rate limits to your site.
 ]]
 local _M = {
-  _VERSION = '0.3.5'
+  _VERSION = '0.3.6'
 }
 
 local redis = require("resty.redis")
@@ -912,6 +912,14 @@ function _M.proxy_pass(backend_url)
   end
 
   return res
+end
+
+function _M.device()
+  local dv = get_device_id()
+  if dv == nil then
+    dev = "nil"
+  end
+  return dv
 end
 
 return _M
