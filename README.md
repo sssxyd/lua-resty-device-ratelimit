@@ -179,10 +179,12 @@ server_device_check_urls: { ["server_name:listen_port"] = "your validate device 
             local drl = require("resty.device.ratelimit")
             -- 1. no deviceId or deviceId is invalid, exit with HTTP Status Code 401
             if not drl.check() then
+                ngx.log(ngx.ERR, 'AUTH:', drl.device())
                 ngx.exit(401)
             end
             -- 2. if access count of current uri >= 4 times in latest 10 seconds within the entire site 
             if drl.limit("global_current_uri", 10, 4) then
+                ngx.log(ngx.ERR, 'GLOBAL:', drl.device())
                 ngx.exit(503)
             end
             -- 3. asynchronously log this visit and continue execution 
@@ -198,9 +200,11 @@ server_device_check_urls: { ["server_name:listen_port"] = "your validate device 
             local drl = require("resty.device.ratelimit")
             -- no deviceId or deviceId is invalid, exit with HTTP Status Code 401
             if not drl.check() then
+                ngx.log(ngx.ERR, 'AUTH:', drl.device())
                 ngx.exit(401)
             end
             if drl.limit("device_current_uri", 1, 1) then
+                ngx.log(ngx.ERR, 'LIMIT:', drl.device())
                 ngx.exit(429)
             end
             -- asynchronously log this visit and continue execution 
@@ -215,9 +219,11 @@ server_device_check_urls: { ["server_name:listen_port"] = "your validate device 
         access_by_lua_block {
             local drl = require("resty.device.ratelimit")
             if not drl.check() then
+                ngx.log(ngx.ERR, 'AUTH:', drl.device())
                 ngx.exit(401)
             end
             if drl.limit("device_current_uri", 3, 1) or drl.limit("device_total_uris", 10, 40) then
+                ngx.log(ngx.ERR, 'LIMIT:', drl.device())
                 ngx.exit(429)
             end
             drl.record()
@@ -298,10 +304,12 @@ Response JSON
             local drl = require("resty.device.ratelimit")
             -- 1. no deviceId or deviceId is invalid, exit with HTTP Status Code 401
             if not drl.check() then
+                ngx.log(ngx.ERR, 'AUTH:', drl.device())
                 ngx.exit(401)
             end
             -- 2. if access count of current uri >= 4 times in latest 10 seconds within the entire site 
             if drl.limit("global_current_uri", 10, 4) then
+                ngx.log(ngx.ERR, 'GLOBAL:', drl.device())
                 ngx.exit(503)
             end
             -- 3. asynchronously log this visit and continue execution 
@@ -316,9 +324,11 @@ Response JSON
         access_by_lua_block {
             local drl = require("resty.device.ratelimit")
             if not drl.check() then
+                ngx.log(ngx.ERR, 'AUTH:', drl.device())
                 ngx.exit(401)
             end
             if drl.limit("device_current_uri", 1, 1) then
+                ngx.log(ngx.ERR, 'LIMIT:', drl.device())
                 ngx.exit(429)
             end
             drl.record()
@@ -332,9 +342,11 @@ Response JSON
         access_by_lua_block {
             local drl = require("resty.device.ratelimit")
             if not drl.check() then
+                ngx.log(ngx.ERR, 'AUTH:', drl.device())
                 ngx.exit(401)
             end
             if drl.limit("device_current_uri", 3, 1) or drl.limit("device_total_uris", 10, 40) then
+                ngx.log(ngx.ERR, 'LIMIT:', drl.device())
                 ngx.exit(429)
             end
             drl.record()
