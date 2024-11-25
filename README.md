@@ -14,7 +14,7 @@ Please follow the [official documentation](https://openresty.org/en/installation
 Then, install the following modules:
 
 1. openresty/lua-resty-redis
-2. pintsized/lua-resty-http
+2. ledgetech/lua-resty-http
 3. openresty/lua-resty-string
 4. sssxyd/lua-resty-device-ratelimit
 
@@ -32,9 +32,9 @@ yum install -y openresty
 yum install -y openresty-opm openresty-resty
 
 opm get openresty/lua-resty-redis
-opm get pintsized/lua-resty-http
+opm get ledgetech/lua-resty-http
 opm get openresty/lua-resty-string
-opm get pintsized/lua-resty-device-ratelimit
+opm get sssxyd/lua-resty-device-ratelimit
 
 systemctl enable openresty
 

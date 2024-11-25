@@ -4,7 +4,7 @@ Date: 2023/10/23
 Using OpenResty, add non-intrusive client interface access permissions and rate limits to your site.
 ]]
 local _M = {
-  _VERSION = '0.3.6'
+  _VERSION = '0.4.0'
 }
 
 local redis = require("resty.redis")
@@ -98,7 +98,7 @@ local function number_value(obj)
   
   if obj_type == "table" then
     local count = 0
-    for _ in pairs(myTable) do
+    for _ in pairs(obj) do
         count = count + 1
     end
     return count
@@ -111,9 +111,12 @@ local function isValidHttpUrl(url)
     return string.match(url, "^https?://[%w-_%.%?%.:/%+=&]+") ~= nil
 end
 
-
 local function get_redis_client()
   local red = redis:new()
+  if red == nil then
+    ngx.log(ngx.ERR, "Failed to instantiate Redis object")
+    return nil
+  end
   red:set_timeout(Configuration.redis.time_out_mills)
   local ok, err = red:connect(Configuration.redis.host, Configuration.redis.port)
   if not ok then
@@ -428,7 +431,7 @@ local function timer_incr_visit_hits(premature, timestamp_second, server_key, de
   
   for i, res in ipairs(responses) do
     if not res then
-      ngx.log(ngx.ERR, "Failed to execute command in pipeline at index ", i, ": ", errors[i])
+      ngx.log(ngx.ERR, "Failed to execute command in pipeline at index ", i, ": ", errors and errors[i] or "unknown error")
     end
   end
 end
@@ -529,6 +532,9 @@ local function do_check_device_id(device_id, device_key, remote_addr, request_ur
   end
   
   local httpc = http.new()
+  if httpc == nil then
+    return true
+  end
   httpc:set_timeout(3000)
   local data = {
       device_id = device_id,
@@ -595,6 +601,9 @@ local function is_device_id_valid(device_id, device_key, remote_addr, req_uri, r
   if ngx.ctx.device_ratelimit_device_id_valid == nil then
     --Attempt to retrieve the verification status of the deviceId from Redis
     local client = get_redis_client()
+    if client == nil then
+      return true
+    end
     local val = client:get(get_server_redis_key_prefix(get_server_key(server_name, server_port)) .. device_key .. "_valid")
     close_redis_client(client)
     
@@ -754,6 +763,9 @@ function _M.check()
   if ngx.ctx.device_ratelimit_device_id_valid == nil then
     --Attempt to retrieve the verification status of the deviceId from Redis
     local client = get_redis_client()
+    if client == nil then
+      return true
+    end
     local val = client:get("resty_device_ratelimit_" .. device_key .. "_valid")
     close_redis_client(client)
     
@@ -828,14 +840,26 @@ function _M.encrypt(data, secret)
   
   -- key = sha256(secret)
   local sha256 = resty_sha256:new()
+  if sha256 == nil then
+    return data
+  end
   sha256:update(secret)
   local key = sha256:final()
+  if key == nil then
+    return data
+  end
   
   -- iv = md5(secret):sub(1,16)
-  local iv = ngx.md5(secret):sub(1, 16)  
+  local iv = ngx.md5(secret):sub(1, 16)
   
-  local aes_256_cbc_with_padding = resty_aes:new(key, nil, resty_aes.cipher(256, "cbc"), { iv = iv })
+  local aes_256_cbc_with_padding = resty_aes:new(key, nil, resty_aes.cipher('256', "cbc"), { iv = iv })
+  if aes_256_cbc_with_padding == nil then
+    return data
+  end
   local encrypted = aes_256_cbc_with_padding:encrypt(data)
+  if encrypted == nil then
+    return data
+  end
   return resty_string.to_hex(encrypted)
 end
 
@@ -846,14 +870,23 @@ function _M.decrypt(encrypt_hex, secret)
   
   -- key = sha256(secret)
   local sha256 = resty_sha256:new()
+  if sha256 == nil then
+    return encrypt_hex
+  end
   sha256:update(secret)
   local key = sha256:final()
+  if key == nil then
+    return encrypt_hex
+  end
   
   -- iv = md5(secret):sub(1,16)
   local iv = ngx.md5(secret):sub(1, 16)  
   
-  local aes_256_cbc_with_padding = resty_aes:new(key, nil, resty_aes.cipher(256, "cbc"), { iv = iv })
-  
+  local aes_256_cbc_with_padding = resty_aes:new(key, nil, resty_aes.cipher('256', "cbc"), { iv = iv })
+  if aes_256_cbc_with_padding == nil then
+    return encrypt_hex
+  end
+
   local encrypted_data = encrypt_hex:gsub('..', function(h) return string.char(tonumber(h, 16)) end)
   return aes_256_cbc_with_padding:encrypt(encrypted_data)
 end
@@ -862,6 +895,13 @@ end
 --The backend_url must be a real address and does not accept upstream variables
 function _M.proxy_pass(backend_url)
   local httpc = http.new()
+  if httpc == nil then
+    return {
+      status = 500,
+      headers = {},
+      body = "Failed to instantiate http object"
+    }
+  end
   local req_method = ngx.req.get_method()
   local req_headers = ngx.req.get_headers()
   
@@ -917,7 +957,7 @@ end
 function _M.device()
   local dv = get_device_id()
   if dv == nil then
-    dev = "nil"
+    dv = "nil"
   end
   return dv
 end
