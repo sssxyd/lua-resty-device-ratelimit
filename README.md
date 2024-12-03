@@ -13,10 +13,7 @@ Requirements
 Please follow the [official documentation](https://openresty.org/en/installation.html) to install OpenResty
 Then, install the following modules:
 
-1. openresty/lua-resty-redis
-2. ledgetech/lua-resty-http
-3. openresty/lua-resty-string
-4. sssxyd/lua-resty-device-ratelimit
+sssxyd/lua-resty-device-ratelimit
 
 For CentOS, you can install them using the following commands:
 
@@ -31,9 +28,6 @@ yum-config-manager --add-repo https://openresty.org/package/centos/openresty2.re
 yum install -y openresty
 yum install -y openresty-opm openresty-resty
 
-opm get openresty/lua-resty-redis
-opm get ledgetech/lua-resty-http
-opm get openresty/lua-resty-string
 opm get sssxyd/lua-resty-device-ratelimit
 
 systemctl enable openresty
